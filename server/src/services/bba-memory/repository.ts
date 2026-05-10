@@ -11,6 +11,7 @@
  *   - Functions throw on programmer errors (bad enum, missing FK).
  */
 import { getDb } from "./db.js";
+import { logger } from "../../middleware/logger.js";
 import type {
   FailureClass,
   FailureRow,
@@ -33,6 +34,8 @@ import type {
 } from "./types.js";
 
 const nowIso = () => new Date().toISOString();
+const IDEMPOTENCY_TTL_MS = 60_000;
+const PENDING_SENTINEL = "__PENDING__";
 
 // ---------------------------------------------------------------------------
 // Training sessions
@@ -256,6 +259,95 @@ export function getCompanyStatsSummary(companyId: string, windowDays = 7): Compa
     successRatePct: total > 0 ? Math.round((success / total) * 1000) / 10 : null,
     topFailureClasses: topFailureClasses.map((r) => ({ class: r.class, count: Number(r.count) })),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency
+// ---------------------------------------------------------------------------
+
+export type IdempotencyClaimResult =
+  | "claimed"
+  | "exists_pending"
+  | "exists_complete";
+
+function pruneExpiredIdempotencyKeys(): void {
+  const cutoff = new Date(Date.now() - IDEMPOTENCY_TTL_MS).toISOString();
+  getDb().prepare("DELETE FROM idempotency_keys WHERE created_at < ?").run(cutoff);
+}
+
+export function claimIdempotencyKey(
+  key: string,
+  companyId: string,
+): IdempotencyClaimResult {
+  const db = getDb();
+  pruneExpiredIdempotencyKeys();
+
+  const result = db
+    .prepare(
+      `INSERT OR IGNORE INTO idempotency_keys (
+         key, company_id, response_json, created_at
+       ) VALUES (?, ?, ?, ?)`,
+    )
+    .run(key, companyId, PENDING_SENTINEL, nowIso());
+
+  if ((result.changes ?? 0) > 0) return "claimed";
+
+  const row = db
+    .prepare(
+      `SELECT response_json FROM idempotency_keys
+       WHERE key = ? AND company_id = ?`,
+    )
+    .get(key, companyId) as { response_json: string } | undefined;
+
+  if (!row) return "claimed";
+  return row.response_json === PENDING_SENTINEL
+    ? "exists_pending"
+    : "exists_complete";
+}
+
+export function getIdempotencyKey(
+  key: string,
+  companyId: string,
+): { response_json: string } | undefined {
+  pruneExpiredIdempotencyKeys();
+
+  const row = getDb()
+    .prepare(
+      `SELECT response_json FROM idempotency_keys
+       WHERE key = ? AND company_id = ?`,
+    )
+    .get(key, companyId) as { response_json: string } | undefined;
+
+  if (!row || row.response_json === PENDING_SENTINEL) return undefined;
+  return row;
+}
+
+export function putIdempotencyKey(
+  key: string,
+  companyId: string,
+  responseJson: string,
+): void {
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO idempotency_keys (
+         key, company_id, response_json, created_at
+       ) VALUES (?, ?, ?, ?)`,
+    )
+    .run(key, companyId, responseJson, nowIso());
+}
+
+export function safeParseMetaJson(metaJson: string | null, runId?: number): unknown {
+  if (!metaJson) return null;
+
+  try {
+    return JSON.parse(metaJson);
+  } catch (err) {
+    logger.warn(
+      { runId, err },
+      "bba-memory: meta_json parse failed, returning null",
+    );
+    return null;
+  }
 }
 
 export function listRunsForSession(sessionId: number): RunRow[] {
