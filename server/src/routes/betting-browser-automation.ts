@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import type { Db } from "@paperclipai/db";
 import {
   bettingBrowserAutomationService,
@@ -6,6 +6,11 @@ import {
   type BettingAutomationExecutionOptions,
 } from "../services/betting-browser-automation.js";
 import { instrumentBettingService } from "../services/bba-memory-instrumentation.js";
+import {
+  claimIdempotencyKey,
+  getIdempotencyKey,
+  putIdempotencyKey,
+} from "../services/bba-memory/index.js";
 import { secretService } from "../services/secrets.js";
 import { assertCompanyAccess } from "./authz.js";
 import { unprocessable } from "../errors.js";
@@ -64,6 +69,14 @@ function optionalBrowserName(value: unknown): "chromium" | "firefox" | undefined
   if (value !== "chromium" && value !== "firefox") {
     throw unprocessable("execution.browserName must be 'chromium' or 'firefox'.");
   }
+  return value;
+}
+
+function readIdempotencyKey(req: Request): string | null {
+  const raw = req.headers["idempotency-key"];
+  if (typeof raw !== "string") return null;
+  const value = raw.trim();
+  if (value.length < 1 || value.length > 128) return null;
   return value;
 }
 
@@ -184,6 +197,29 @@ export function bettingBrowserAutomationRoutes(db: Db) {
     }
 
     const execution = normalizeExecutionForPreAuth(parseExecution(body.execution));
+    const idempotencyKey = readIdempotencyKey(req);
+
+    let shouldStoreIdempotencyResult = false;
+    if (idempotencyKey) {
+      const claim = claimIdempotencyKey(idempotencyKey, companyId);
+
+      if (claim === "exists_complete") {
+        const cached = getIdempotencyKey(idempotencyKey, companyId);
+        if (cached) {
+          res.setHeader("X-Idempotent-Replay", "true");
+          return res.json(JSON.parse(cached.response_json));
+        }
+      }
+
+      if (claim === "exists_pending") {
+        return res.status(409).json({
+          error: "request_in_progress",
+          retryAfterMs: 5000,
+        });
+      }
+
+      shouldStoreIdempotencyResult = claim === "claimed";
+    }
 
     const result = await svc.execute({
       companyId,
@@ -242,6 +278,10 @@ export function bettingBrowserAutomationRoutes(db: Db) {
       },
       execution,
     });
+
+    if (idempotencyKey && shouldStoreIdempotencyResult) {
+      putIdempotencyKey(idempotencyKey, companyId, JSON.stringify(result));
+    }
 
     res.json(result);
   });

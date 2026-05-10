@@ -3,17 +3,9 @@ import {
   listRecentRuns,
   listRecentRunsForCompany,
   getCompanyStatsSummary,
+  safeParseMetaJson,
 } from "../services/bba-memory/index.js";
 import { assertCompanyAccess } from "./authz.js";
-
-function safeParseMetaJson(value: string | null): unknown {
-  if (!value) return null;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
 
 export function bbaMemoryRoutes() {
   const router = Router();
@@ -45,7 +37,7 @@ export function bbaMemoryRoutes() {
         outcome: r.outcome,
         failureClass: r.failure_class,
         durationMs: r.duration_ms,
-        meta: safeParseMetaJson(r.meta_json),
+        meta: safeParseMetaJson(r.meta_json, r.id),
       })),
     });
   });

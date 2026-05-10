@@ -88,7 +88,7 @@ describe("BbaMemoryExecuteBetPanel", () => {
   });
 
   it("calls executeBbaBet and shows success result panel", async () => {
-    mockExecute.mockResolvedValueOnce({ status: "success", placedBetId: "bet-123" });
+    mockExecute.mockResolvedValueOnce({ status: "completed", placedBetId: "bet-123", wasReplay: false });
     render(
       <BbaMemoryExecuteBetPanel companyId="c1" payload={PAYLOAD} betSummary={SUMMARY} />,
       { wrapper: makeWrapper() },
@@ -97,13 +97,15 @@ describe("BbaMemoryExecuteBetPanel", () => {
     fireEvent.change(screen.getByTestId("confirm-input"), { target: { value: "CONFIRM" } });
     fireEvent.click(screen.getByTestId("confirm-submit-button"));
     await waitFor(() => expect(screen.getByTestId("result-panel")).toBeInTheDocument());
-    expect(mockExecute).toHaveBeenCalledWith("c1", PAYLOAD);
-    expect(screen.getByTestId("result-panel")).toHaveAttribute("data-outcome", "success");
+    expect(mockExecute).toHaveBeenCalledWith("c1", PAYLOAD, {
+      idempotencyKey: expect.any(String),
+    });
+    expect(screen.getByTestId("result-panel")).toHaveAttribute("data-outcome", "completed");
     expect(screen.getByText(/bet-123/)).toBeInTheDocument();
   });
 
   it("shows failure result panel with failureReason", async () => {
-    mockExecute.mockResolvedValueOnce({ status: "failure", failureReason: "LOGIN_FAILED" });
+    mockExecute.mockResolvedValueOnce({ status: "failed", failureReason: "LOGIN_FAILED", wasReplay: false });
     render(
       <BbaMemoryExecuteBetPanel companyId="c1" payload={PAYLOAD} betSummary={SUMMARY} />,
       { wrapper: makeWrapper() },
@@ -112,12 +114,12 @@ describe("BbaMemoryExecuteBetPanel", () => {
     fireEvent.change(screen.getByTestId("confirm-input"), { target: { value: "CONFIRM" } });
     fireEvent.click(screen.getByTestId("confirm-submit-button"));
     await waitFor(() => expect(screen.getByTestId("result-panel")).toBeInTheDocument());
-    expect(screen.getByTestId("result-panel")).toHaveAttribute("data-outcome", "failure");
+    expect(screen.getByTestId("result-panel")).toHaveAttribute("data-outcome", "failed");
     expect(screen.getByText(/LOGIN_FAILED/)).toBeInTheDocument();
   });
 
   it("shows partial result panel in yellow", async () => {
-    mockExecute.mockResolvedValueOnce({ status: "partial" });
+    mockExecute.mockResolvedValueOnce({ status: "partial", wasReplay: false });
     render(
       <BbaMemoryExecuteBetPanel companyId="c1" payload={PAYLOAD} betSummary={SUMMARY} />,
       { wrapper: makeWrapper() },
@@ -127,7 +129,7 @@ describe("BbaMemoryExecuteBetPanel", () => {
     fireEvent.click(screen.getByTestId("confirm-submit-button"));
     await waitFor(() => expect(screen.getByTestId("result-panel")).toBeInTheDocument());
     expect(screen.getByTestId("result-panel")).toHaveAttribute("data-outcome", "partial");
-    expect(screen.getByTestId("result-panel")).toHaveStyle({ backgroundColor: "#fef9c3" });
+    expect(screen.getByTestId("result-panel")).toHaveClass("bg-yellow-100");
   });
 
   it("shows error panel on network error", async () => {
@@ -144,7 +146,7 @@ describe("BbaMemoryExecuteBetPanel", () => {
   });
 
   it("shows idempotency warning within 60s of last submit", async () => {
-    mockExecute.mockResolvedValueOnce({ status: "success" });
+    mockExecute.mockResolvedValueOnce({ status: "completed", wasReplay: false });
     render(
       <BbaMemoryExecuteBetPanel companyId="c1" payload={PAYLOAD} betSummary={SUMMARY} />,
       { wrapper: makeWrapper() },

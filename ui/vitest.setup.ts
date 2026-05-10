@@ -1,18 +1,23 @@
-const storageEntries = new Map<string, string>();
+const localStorageEntries = new Map<string, string>();
+const sessionStorageEntries = new Map<string, string>();
 
-function installStorageMock(target: Record<string, unknown>) {
-  Object.defineProperty(target, "localStorage", {
+function installStorageMock(
+  target: Record<string, unknown>,
+  name: "localStorage" | "sessionStorage",
+  entries: Map<string, string>,
+) {
+  Object.defineProperty(target, name, {
     configurable: true,
     value: {
-      getItem: (key: string) => storageEntries.get(key) ?? null,
+      getItem: (key: string) => entries.get(key) ?? null,
       setItem: (key: string, value: string) => {
-        storageEntries.set(key, String(value));
+        entries.set(key, String(value));
       },
       removeItem: (key: string) => {
-        storageEntries.delete(key);
+        entries.delete(key);
       },
       clear: () => {
-        storageEntries.clear();
+        entries.clear();
       },
     },
   });
@@ -24,11 +29,24 @@ if (
   || typeof globalThis.localStorage?.removeItem !== "function"
   || typeof globalThis.localStorage?.clear !== "function"
 ) {
-  installStorageMock(globalThis);
+  installStorageMock(globalThis, "localStorage", localStorageEntries);
+}
+
+if (
+  typeof globalThis.sessionStorage?.getItem !== "function"
+  || typeof globalThis.sessionStorage?.setItem !== "function"
+  || typeof globalThis.sessionStorage?.removeItem !== "function"
+  || typeof globalThis.sessionStorage?.clear !== "function"
+) {
+  installStorageMock(globalThis, "sessionStorage", sessionStorageEntries);
 }
 
 if (typeof window !== "undefined" && window.localStorage !== globalThis.localStorage) {
-  installStorageMock(window as unknown as Record<string, unknown>);
+  installStorageMock(window as unknown as Record<string, unknown>, "localStorage", localStorageEntries);
+}
+
+if (typeof window !== "undefined" && window.sessionStorage !== globalThis.sessionStorage) {
+  installStorageMock(window as unknown as Record<string, unknown>, "sessionStorage", sessionStorageEntries);
 }
 
 // ── @testing-library/jest-dom matchers ─────────────────────────────────────
@@ -38,4 +56,6 @@ import { cleanup } from "@testing-library/react";
 
 afterEach(() => {
   cleanup();
+  globalThis.localStorage?.clear();
+  globalThis.sessionStorage?.clear();
 });

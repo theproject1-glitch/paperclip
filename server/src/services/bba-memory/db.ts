@@ -29,7 +29,7 @@ function resolveSchemaPath(): string {
   return path.join(here, "schema.sql");
 }
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 let dbInstance: DatabaseSync | null = null;
 

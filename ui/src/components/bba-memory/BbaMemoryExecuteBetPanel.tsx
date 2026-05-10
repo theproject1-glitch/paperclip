@@ -1,25 +1,11 @@
-/**
- * BbaMemoryExecuteBetPanel — HIGH-RISK write path.
- *
- * Safety design:
- *   1. Button disabled until valid props received.
- *   2. Two-step confirmation: modal + typed "CONFIRM" string.
- *   3. Request in-flight: button disabled, spinner shown.
- *   4. Idempotency guard: blocks re-submit within 60s of last attempt.
- *   5. Result shown inline until user dismisses.
- */
-// TODO(tests): Add unit tests in ui/src/components/bba-memory/__tests__/ when
-// @testing-library/react is in ui/package.json devDependencies.
-// Target: 9 tests (8 unit + 1 snapshot) — see docs/codex-prompts/component-2-execute-button.md PHASE 3.
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   executeBbaBet,
   type ExecuteBetRequest,
-  type ExecuteBetResponse,
+  type ExecuteBetResult,
 } from "../../api/bbaMemory";
-
-// ── Types ───────────────────────────────────────────────────────────────────
+import { cn } from "../../lib/utils";
 
 interface BetSummary {
   matchLabel: string;
@@ -33,265 +19,304 @@ interface BetSummary {
 
 export interface BbaMemoryExecuteBetPanelProps {
   companyId: string;
-  /** Pre-filled from bookmaker config selector (parent responsibility). */
   payload: ExecuteBetRequest | null;
-  /** Human-readable bet summary for modal display. Derived from payload by parent. */
   betSummary: BetSummary | null;
-  /** Called after a successful execute with the response. */
-  onSuccess?: (response: ExecuteBetResponse) => void;
+  onSuccess?: (response: ExecuteBetResult) => void;
+  disabled?: boolean;
+  className?: string;
 }
-
-// ── Constants ────────────────────────────────────────────────────────────────
 
 const IDEMPOTENCY_WINDOW_MS = 60_000;
 const CONFIRM_KEYWORD = "CONFIRM";
+const PARTIAL_POLL_INTERVAL_MS = 5_000;
+const PARTIAL_POLL_MAX_MS = 60_000;
+const SS_KEY = "bba-memory.lastSubmitAt";
 
-// ── Component ────────────────────────────────────────────────────────────────
+function readLastSubmit(companyId: string): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(SS_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, number>;
+    return map[companyId] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastSubmit(companyId: string, ts: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = sessionStorage.getItem(SS_KEY);
+    const map = raw ? JSON.parse(raw) as Record<string, number> : {};
+    map[companyId] = ts;
+    sessionStorage.setItem(SS_KEY, JSON.stringify(map));
+  } catch {
+    // Storage can be unavailable in private mode or quota-constrained contexts.
+  }
+}
+
+function makeIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `bba-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 export function BbaMemoryExecuteBetPanel({
   companyId,
   payload,
   betSummary,
   onSuccess,
+  disabled = false,
+  className,
 }: BbaMemoryExecuteBetPanelProps) {
   const queryClient = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
-  const [result, setResult] = useState<ExecuteBetResponse | null>(null);
+  const [result, setResult] = useState<ExecuteBetResult | null>(null);
   const [resultError, setResultError] = useState<string | null>(null);
-  const lastSubmitAt = useRef<number | null>(null);
+  const [wasReplay, setWasReplay] = useState(false);
+  const [submitClock, setSubmitClock] = useState(Date.now());
+  const modalRef = useRef<HTMLDivElement>(null);
 
+  const lastCompanySubmit = readLastSubmit(companyId);
   const isWithinIdempotencyWindow =
-    lastSubmitAt.current !== null &&
-    Date.now() - lastSubmitAt.current < IDEMPOTENCY_WINDOW_MS;
+    lastCompanySubmit !== null && submitClock - lastCompanySubmit < IDEMPOTENCY_WINDOW_MS;
 
   const { mutate, isPending } = useMutation({
-    mutationFn: (req: ExecuteBetRequest) => executeBbaBet(companyId, req),
+    mutationFn: ({ req, idempotencyKey }: { req: ExecuteBetRequest; idempotencyKey: string }) =>
+      executeBbaBet(companyId, req, { idempotencyKey }),
     onSuccess: (res) => {
       setResult(res);
+      setWasReplay(res.wasReplay ?? false);
       setResultError(null);
       queryClient.invalidateQueries({ queryKey: ["bba-memory", "recent-runs", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["bba-memory", "stats", companyId] });
       onSuccess?.(res);
     },
     onError: (err) => {
       setResultError(err instanceof Error ? err.message : String(err));
       setResult(null);
+      setWasReplay(false);
     },
   });
 
-  const openModal = useCallback(() => {
-    if (isWithinIdempotencyWindow) return;
-    setConfirmText("");
-    setResult(null);
-    setResultError(null);
-    setModalOpen(true);
+  useEffect(() => {
+    if (!isWithinIdempotencyWindow) return;
+    const timer = window.setInterval(() => setSubmitClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
   }, [isWithinIdempotencyWindow]);
+
+  useEffect(() => {
+    if (result?.status !== "partial") return;
+    const start = Date.now();
+    const interval = window.setInterval(() => {
+      if (Date.now() - start >= PARTIAL_POLL_MAX_MS) {
+        window.clearInterval(interval);
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["bba-memory", "recent-runs", companyId] });
+      queryClient.invalidateQueries({ queryKey: ["bba-memory", "stats", companyId] });
+    }, PARTIAL_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [result?.status, companyId, queryClient]);
 
   const closeModal = useCallback(() => {
     setModalOpen(false);
     setConfirmText("");
   }, []);
 
+  useEffect(() => {
+    if (!modalOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeModal();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [closeModal, modalOpen]);
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    const modal = modalRef.current;
+    if (!modal) return;
+
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const focusables = Array.from(
+        modal.querySelectorAll<HTMLElement>(
+          'input:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusables.length === 0) return;
+
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    modal.addEventListener("keydown", handler);
+    return () => modal.removeEventListener("keydown", handler);
+  }, [modalOpen]);
+
+  const openModal = useCallback(() => {
+    setSubmitClock(Date.now());
+    if (disabled || isWithinIdempotencyWindow || !payload || !betSummary) return;
+    setConfirmText("");
+    setResult(null);
+    setResultError(null);
+    setWasReplay(false);
+    setModalOpen(true);
+  }, [betSummary, disabled, isWithinIdempotencyWindow, payload]);
+
   const handleConfirm = useCallback(() => {
     if (!payload || confirmText !== CONFIRM_KEYWORD || isPending) return;
-    lastSubmitAt.current = Date.now();
+    const idempotencyKey = makeIdempotencyKey();
+    writeLastSubmit(companyId, Date.now());
+    setSubmitClock(Date.now());
     setModalOpen(false);
-    mutate(payload);
-  }, [payload, confirmText, isPending, mutate]);
+    mutate({ req: payload, idempotencyKey });
+  }, [companyId, confirmText, isPending, mutate, payload]);
 
-  const isPlaceDisabled = !payload || !betSummary || isPending || isWithinIdempotencyWindow;
+  const isPlaceDisabled =
+    disabled || !payload || !betSummary || isPending || isWithinIdempotencyWindow;
+  const isSuccess = result?.status === "completed";
+  const isPartial =
+    result?.status === "partial" || result?.status === "submitted_unconfirmed";
 
   return (
-    <div data-testid="bba-execute-panel">
-      {/* ── Idempotency warning ─────────────────────────── */}
+    <div data-testid="bba-execute-panel" className={cn("space-y-3", className)}>
       {isWithinIdempotencyWindow && (
-        <div
-          data-testid="idempotency-warning"
-          style={{ color: "#b45309", marginBottom: 8, fontSize: 13 }}
-        >
-          ⚠ A bet was submitted less than 60s ago. Wait before placing another to avoid duplicates.
+        <div data-testid="idempotency-warning" className="text-xs text-amber-700">
+          A bet was submitted less than 60 seconds ago. Wait before placing another.
         </div>
       )}
 
-      {/* ── Place Bet button ─────────────────────────────── */}
       <button
         data-testid="place-bet-button"
+        type="button"
         disabled={isPlaceDisabled}
         onClick={openModal}
-        style={{
-          backgroundColor: isPlaceDisabled ? "#9ca3af" : "#dc2626",
-          color: "white",
-          padding: "8px 20px",
-          border: "none",
-          borderRadius: 4,
-          cursor: isPlaceDisabled ? "not-allowed" : "pointer",
-          fontWeight: 600,
-        }}
+        className={cn(
+          "inline-flex items-center justify-center rounded-md px-5 py-2 text-sm font-semibold text-white transition",
+          isPlaceDisabled
+            ? "cursor-not-allowed bg-gray-400"
+            : "bg-red-600 hover:bg-red-700",
+        )}
       >
-        {isPending ? "Placing bet…" : "Place Bet"}
+        {isPending ? "Placing bet..." : "Place Bet"}
       </button>
 
-      {/* ── In-flight spinner ───────────────────────────── */}
       {isPending && (
-        <span data-testid="placing-spinner" style={{ marginLeft: 10, color: "#6b7280" }}>
-          ⏳ Placing bet…
+        <span data-testid="placing-spinner" className="ml-2 text-sm text-gray-500">
+          Placing bet...
         </span>
       )}
 
-      {/* ── Result panel ────────────────────────────────── */}
       {result && (
         <div
           data-testid="result-panel"
           data-outcome={result.status}
-          style={{
-            marginTop: 12,
-            padding: "10px 14px",
-            borderRadius: 6,
-            backgroundColor:
-              result.status === "success"
-                ? "#dcfce7"
-                : result.status === "partial"
-                  ? "#fef9c3"
-                  : "#fee2e2",
-            color:
-              result.status === "success"
-                ? "#166534"
-                : result.status === "partial"
-                  ? "#854d0e"
-                  : "#991b1b",
-          }}
+          className={cn(
+            "rounded-md px-3 py-2 text-sm",
+            isSuccess && "bg-green-100 text-green-800",
+            isPartial && "bg-yellow-100 text-yellow-800",
+            !isSuccess && !isPartial && "bg-red-100 text-red-800",
+          )}
         >
-          {result.status === "success" && (
-            <>
-              <span>✅ Bet placed successfully.</span>
-              {result.placedBetId && (
-                <span style={{ marginLeft: 8, fontSize: 12 }}>
-                  ID: {result.placedBetId}
-                </span>
-              )}
-            </>
+          {isSuccess && (
+            <span>
+              Bet placed successfully
+              {result.placedBetId ? ` (ID: ${result.placedBetId})` : ""}.
+            </span>
           )}
-          {result.status === "partial" && (
-            <span>⚠ Bet partially completed. Verify in bookmaker history.</span>
+          {isPartial && <span>Bet submitted but needs bookmaker history verification.</span>}
+          {!isSuccess && !isPartial && (
+            <span>Bet failed{result.failureReason ? `: ${result.failureReason}` : "."}</span>
           )}
-          {result.status !== "success" && result.status !== "partial" && (
-            <>
-              <span>❌ Bet failed.</span>
-              {result.failureReason && (
-                <span style={{ marginLeft: 8, fontSize: 12 }}>
-                  Reason: {result.failureReason}
-                </span>
-              )}
-            </>
+          {wasReplay && (
+            <div className="mt-1 text-xs italic text-gray-500" data-testid="replay-banner">
+              ↻ Cached replay (60s window)
+            </div>
           )}
         </div>
       )}
 
       {resultError && (
-        <div
-          data-testid="error-panel"
-          style={{ marginTop: 12, color: "#991b1b", fontSize: 13 }}
-        >
-          ❌ Error: {resultError}
+        <div data-testid="error-panel" className="text-xs text-red-800">
+          Error: {resultError}
         </div>
       )}
 
-      {/* ── Confirmation modal ──────────────────────────── */}
       {modalOpen && betSummary && (
         <div
           data-testid="confirm-modal-overlay"
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-modal-title"
-          style={{
-            position: "fixed",
-            inset: 0,
-            backgroundColor: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 9999,
-          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4"
         >
           <div
-            style={{
-              backgroundColor: "white",
-              borderRadius: 8,
-              padding: 24,
-              maxWidth: 480,
-              width: "100%",
-              boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
-            }}
+            ref={modalRef}
+            className="w-full max-w-[480px] rounded-lg bg-white p-6 shadow-2xl"
           >
-            <h2 id="confirm-modal-title" style={{ marginTop: 0, color: "#111827" }}>
-              ⚠ Confirm Real Bet Placement
+            <h2 id="confirm-modal-title" className="m-0 text-lg font-semibold text-gray-900">
+              Confirm Real Bet Placement
             </h2>
 
-            <p style={{ lineHeight: 1.6, color: "#374151" }}>
-              Confirm: place{" "}
+            <p className="mt-4 text-sm leading-6 text-gray-700">
+              Confirm placing{" "}
               <strong>
                 {betSummary.currency ?? "RON"} {betSummary.stake}
               </strong>{" "}
               on <strong>{betSummary.matchLabel}</strong> at{" "}
-              <strong>{betSummary.bookmaker}</strong> (odds{" "}
-              <strong>{betSummary.odds}</strong>). This will trigger a{" "}
-              <strong>REAL bet placement</strong> against the live bookmaker.
+              <strong>{betSummary.bookmaker}</strong> with odds{" "}
+              <strong>{betSummary.odds}</strong>.
             </p>
 
-            <p style={{ color: "#6b7280", fontSize: 13 }}>
+            <p className="text-xs text-gray-500">
               Market: {betSummary.market} · Selection: {betSummary.selection}
             </p>
 
-            <p style={{ fontWeight: 600, color: "#374151" }}>
-              Type <code>CONFIRM</code> below to proceed:
-            </p>
+            <label className="mt-4 block text-sm font-semibold text-gray-700">
+              Type <code>{CONFIRM_KEYWORD}</code> to proceed
+              <input
+                data-testid="confirm-input"
+                type="text"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="Type CONFIRM"
+                autoFocus
+                className="mt-2 w-full rounded border border-gray-300 px-3 py-2 text-base"
+              />
+            </label>
 
-            <input
-              data-testid="confirm-input"
-              type="text"
-              value={confirmText}
-              onChange={(e) => setConfirmText(e.target.value)}
-              placeholder="Type CONFIRM"
-              autoFocus
-              style={{
-                width: "100%",
-                padding: "8px 10px",
-                fontSize: 15,
-                border: "1px solid #d1d5db",
-                borderRadius: 4,
-                boxSizing: "border-box",
-                marginBottom: 16,
-              }}
-            />
-
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <div className="mt-5 flex justify-end gap-2">
               <button
                 data-testid="cancel-button"
+                type="button"
                 onClick={closeModal}
-                style={{
-                  padding: "8px 18px",
-                  border: "1px solid #d1d5db",
-                  borderRadius: 4,
-                  cursor: "pointer",
-                  backgroundColor: "white",
-                }}
+                className="rounded border border-gray-300 bg-white px-4 py-2 text-sm"
               >
                 Cancel
               </button>
               <button
                 data-testid="confirm-submit-button"
+                type="button"
                 disabled={confirmText !== CONFIRM_KEYWORD}
                 onClick={handleConfirm}
-                style={{
-                  padding: "8px 18px",
-                  backgroundColor:
-                    confirmText === CONFIRM_KEYWORD ? "#dc2626" : "#9ca3af",
-                  color: "white",
-                  border: "none",
-                  borderRadius: 4,
-                  cursor: confirmText === CONFIRM_KEYWORD ? "pointer" : "not-allowed",
-                  fontWeight: 600,
-                }}
+                className={cn(
+                  "rounded px-4 py-2 text-sm font-semibold text-white",
+                  confirmText === CONFIRM_KEYWORD
+                    ? "bg-red-600 hover:bg-red-700"
+                    : "cursor-not-allowed bg-gray-400",
+                )}
               >
                 Place Real Bet
               </button>

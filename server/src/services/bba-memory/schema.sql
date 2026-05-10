@@ -168,3 +168,19 @@ CREATE TABLE IF NOT EXISTS failures (
 
 CREATE INDEX IF NOT EXISTS idx_failures_class    ON failures(failure_class, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_failures_run      ON failures(run_id);
+
+-- Server-side idempotency store for POST /betting-browser-automation/execute.
+-- Entries are lazily garbage-collected after a 60s response-cache window.
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT NOT NULL,
+  company_id TEXT NOT NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (key, company_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_company
+  ON idempotency_keys(company_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_created_at
+  ON idempotency_keys(created_at);

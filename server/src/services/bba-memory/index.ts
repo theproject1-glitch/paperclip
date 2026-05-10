@@ -24,6 +24,10 @@ export {
   listRecentRunsForCompany,
   listRunsForSession,
   getCompanyStatsSummary,
+  claimIdempotencyKey,
+  getIdempotencyKey,
+  putIdempotencyKey,
+  safeParseMetaJson,
   // selectors
   getSelectorsByPurpose,
   listAllSelectors,
