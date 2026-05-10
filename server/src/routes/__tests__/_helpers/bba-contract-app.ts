@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { requestIdMiddleware } from "../../../middleware/request-id.js";
 
 export interface BbaTestAppHandle {
   app: import("express").Express;
@@ -72,6 +73,7 @@ export async function createBbaTestApp(): Promise<BbaTestAppHandle> {
     ]);
 
   const app = express();
+  app.use(requestIdMiddleware());
   app.use(express.json());
   app.use((req, _res, next) => {
     (req as any).actor = actor;
