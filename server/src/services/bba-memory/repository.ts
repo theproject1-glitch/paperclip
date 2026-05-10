@@ -37,6 +37,11 @@ const nowIso = () => new Date().toISOString();
 const IDEMPOTENCY_TTL_MS = 60_000;
 const PENDING_SENTINEL = "__PENDING__";
 
+// PROCESS-LOCAL counter -- resets on server restart. In multi-instance
+// deployments, each Node.js process holds its own counter; aggregate via
+// Prometheus with a `pod` label to avoid double-counting.
+let _idempotencyReplays = 0;
+
 // ---------------------------------------------------------------------------
 // Training sessions
 // ---------------------------------------------------------------------------
@@ -308,17 +313,18 @@ export function claimIdempotencyKey(
 export function getIdempotencyKey(
   key: string,
   companyId: string,
-): { response_json: string } | undefined {
+): { key: string; company_id: string; response_json: string } | undefined {
   pruneExpiredIdempotencyKeys();
 
   const row = getDb()
     .prepare(
-      `SELECT response_json FROM idempotency_keys
+      `SELECT key, company_id, response_json FROM idempotency_keys
        WHERE key = ? AND company_id = ?`,
     )
-    .get(key, companyId) as { response_json: string } | undefined;
+    .get(key, companyId) as { key: string; company_id: string; response_json: string } | undefined;
 
   if (!row || row.response_json === PENDING_SENTINEL) return undefined;
+  _idempotencyReplays += 1;
   return row;
 }
 
@@ -334,6 +340,21 @@ export function putIdempotencyKey(
        ) VALUES (?, ?, ?, ?)`,
     )
     .run(key, companyId, responseJson, nowIso());
+}
+
+export function deleteIdempotentForCompany(companyId: string): number {
+  const result = getDb()
+    .prepare(`DELETE FROM idempotency_keys WHERE company_id = ?`)
+    .run(companyId);
+  return Number(result.changes ?? 0);
+}
+
+export function getIdempotencyReplayCount(): number {
+  return _idempotencyReplays;
+}
+
+export function __resetMetricsForTests(): void {
+  _idempotencyReplays = 0;
 }
 
 export function safeParseMetaJson(metaJson: string | null, runId?: number): unknown {
