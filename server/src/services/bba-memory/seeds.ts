@@ -148,6 +148,28 @@ export const SEED_SELECTORS: SeedSelector[] = [
     source: "seeded",
   },
   {
+    purpose: "login-modal",
+    selector: ".user-box-form, .modal:has(input[type='password'])",
+    label: "Casa login modal — wrapping form",
+    priority: 1,
+    source: "seeded",
+    notes: "Detects whether the login modal is currently visible.",
+  },
+  {
+    purpose: "login-modal",
+    selector: "[role='dialog']:has(input[type='password'])",
+    label: "Generic dialog containing password input",
+    priority: 10,
+    source: "seeded",
+  },
+  {
+    purpose: "login-modal",
+    selector: ".modal.show:has(form)",
+    label: "Bootstrap-style visible modal with form",
+    priority: 20,
+    source: "seeded",
+  },
+  {
     purpose: "username-input",
     selector: "input[type='text']",
     label: "Username — generic text input",
