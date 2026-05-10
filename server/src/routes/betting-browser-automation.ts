@@ -118,6 +118,11 @@ function parseExecution(execution: unknown) {
   };
 }
 
+/**
+ * @internal Exported for testability of the CDP pre-auth flow.
+ * Not part of the stable public API; do not import from external
+ * modules — it may change without notice.
+ */
 export function normalizeExecutionForPreAuth(
   execution: BettingAutomationExecutionOptions | null,
 ): BettingAutomationExecutionOptions | null {

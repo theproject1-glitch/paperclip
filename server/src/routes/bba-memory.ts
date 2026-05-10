@@ -22,7 +22,10 @@ export function bbaMemoryRoutes() {
     const parsed = typeof limitRaw === "string" ? parseInt(limitRaw, 10) : NaN;
     const safeLimit = Number.isFinite(parsed) && parsed > 0 && parsed <= 200 ? parsed : 20;
 
-    // ?all=true is an instance-admin-only override that bypasses company filter.
+    // INSTANCE-ADMIN ESCAPE HATCH: ?all=true bypasses the company filter
+    // and returns runs from ALL companies. Non-admin actors with this
+    // query param fall through to the company-filtered result. Intentional
+    // for cross-tenant debugging; do NOT widen the audience.
     const actor = (req as any).actor;
     const wantsAll = req.query.all === "true";
     const isAdmin = actor?.type === "board" && actor?.isInstanceAdmin === true;

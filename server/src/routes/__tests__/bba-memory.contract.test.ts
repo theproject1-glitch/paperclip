@@ -57,6 +57,35 @@ describe.sequential("bba-memory contract routes", () => {
     expect(res.body.runs[0].meta.companyId).toBe("company-1");
   });
 
+  it("GET /recent-runs?all=true as instance-admin returns runs from all companies", async () => {
+    seedRun("company-1");
+    seedRun("company-2");
+
+    const res = await request(handle.app).get("/api/companies/company-1/bba-memory/recent-runs?all=true");
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.runs.map((run: any) => run.meta.companyId).sort()).toEqual(["company-1", "company-2"]);
+  });
+
+  it("GET /recent-runs?all=true as non-admin gets company-filtered results", async () => {
+    handle.setActor({
+      type: "board",
+      userId: "user-2",
+      companyIds: ["company-1"],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+    seedRun("company-1");
+    seedRun("company-2");
+
+    const res = await request(handle.app).get("/api/companies/company-1/bba-memory/recent-runs?all=true");
+
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(1);
+    expect(res.body.runs[0].meta.companyId).toBe("company-1");
+  });
+
   it("GET /recent-runs respects ?limit clamp", async () => {
     seedRun("company-1");
     seedRun("company-1");

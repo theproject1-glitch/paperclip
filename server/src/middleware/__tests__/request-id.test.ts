@@ -43,4 +43,12 @@ describe("requestIdMiddleware", () => {
     expect(req.requestId).toMatch(uuidRegex);
     expect(res.setHeader).toHaveBeenCalledWith("X-Request-ID", req.requestId);
   });
+
+  it("X-Request-ID with control characters falls back to fresh UUID", () => {
+    const { req, res } = callMiddleware({ "x-request-id": "abc\ndef" });
+
+    expect(req.requestId).toMatch(uuidRegex);
+    expect(req.requestId).not.toBe("abc\ndef");
+    expect(res.setHeader).toHaveBeenCalledWith("X-Request-ID", req.requestId);
+  });
 });
