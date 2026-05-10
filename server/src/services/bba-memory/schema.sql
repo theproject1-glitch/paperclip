@@ -45,7 +45,11 @@ CREATE TABLE IF NOT EXISTS runs (
   trigger TEXT,                                          -- e.g. 'auto-30min', 'session-expired', 'training-1-of-3'
   outcome TEXT
     CHECK (outcome IS NULL OR outcome IN ('success', 'failure', 'partial')),
-  failure_class TEXT,                                    -- see failure_class enum docs
+  failure_class TEXT CHECK (failure_class IS NULL OR failure_class IN (
+    'CAPTCHA_VISIBLE','OTP_REQUIRED','WRONG_CREDS','RATE_LIMITED',
+    'SELECTOR_NOT_FOUND','SELECTOR_STALE','NAVIGATION_TIMEOUT','NETWORK_ERROR',
+    'UNEXPECTED_POPUP','SESSION_NOT_DETECTED','BROWSER_CRASH','UNKNOWN'
+  )),                                                    -- see failure_class enum docs
   session_status_before TEXT
     CHECK (session_status_before IS NULL OR session_status_before IN ('active', 'expired', 'unknown')),
   session_status_after TEXT
@@ -146,7 +150,11 @@ CREATE TABLE IF NOT EXISTS failures (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id INTEGER NOT NULL,
   occurred_at TEXT NOT NULL,
-  failure_class TEXT NOT NULL,
+  failure_class TEXT NOT NULL CHECK (failure_class IN (
+    'CAPTCHA_VISIBLE','OTP_REQUIRED','WRONG_CREDS','RATE_LIMITED',
+    'SELECTOR_NOT_FOUND','SELECTOR_STALE','NAVIGATION_TIMEOUT','NETWORK_ERROR',
+    'UNEXPECTED_POPUP','SESSION_NOT_DETECTED','BROWSER_CRASH','UNKNOWN'
+  )),
   step TEXT,                                             -- e.g. 'cookie-load', 'navigate', 'dismiss-overlay', 'click-conectare', 'fill-username', 'submit', 'verify-session'
   selector_attempted TEXT,
   error_message TEXT,

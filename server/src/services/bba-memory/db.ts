@@ -16,7 +16,8 @@ import { fileURLToPath } from "node:url";
 import { logger } from "../../middleware/logger.js";
 import { SEED_SELECTORS } from "./seeds.js";
 
-const MEMORY_DIR = path.join(os.homedir(), ".paperclip", "bba-memory");
+const MEMORY_DIR =
+  process.env.BBA_MEMORY_DIR ?? path.join(os.homedir(), ".paperclip", "bba-memory");
 const DB_PATH = path.join(MEMORY_DIR, "bba-memory.db");
 export const TRACES_DIR = path.join(MEMORY_DIR, "traces");
 export const SCREENSHOTS_DIR = path.join(MEMORY_DIR, "screenshots");
@@ -28,7 +29,7 @@ function resolveSchemaPath(): string {
   return path.join(here, "schema.sql");
 }
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 let dbInstance: DatabaseSync | null = null;
 
@@ -61,6 +62,10 @@ export function initBbaMemory(): DatabaseSync {
     .prepare("SELECT MAX(version) AS v FROM schema_version")
     .get() as { v: number | null };
   const currentVersion = versionRow?.v ?? 0;
+
+  if (currentVersion > 0 && currentVersion < 2) {
+    migrateRunsAndFailuresAddCheck(db);
+  }
 
   if (currentVersion < CURRENT_SCHEMA_VERSION) {
     db.prepare(
@@ -125,6 +130,112 @@ export function closeBbaMemory(): void {
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
+  }
+}
+
+function migrateRunsAndFailuresAddCheck(db: DatabaseSync): void {
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN");
+  try {
+    db.exec(`
+      CREATE TABLE runs_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        training_session_id INTEGER,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        source TEXT NOT NULL
+          CHECK (source IN ('keepalive', 'login-script', 'relogin-simple',
+                            'probe', 'selector-doctor', 'training', 'manual')),
+        trigger TEXT,
+        outcome TEXT
+          CHECK (outcome IS NULL OR outcome IN ('success', 'failure', 'partial')),
+        failure_class TEXT CHECK (failure_class IS NULL OR failure_class IN (
+          'CAPTCHA_VISIBLE','OTP_REQUIRED','WRONG_CREDS','RATE_LIMITED',
+          'SELECTOR_NOT_FOUND','SELECTOR_STALE','NAVIGATION_TIMEOUT','NETWORK_ERROR',
+          'UNEXPECTED_POPUP','SESSION_NOT_DETECTED','BROWSER_CRASH','UNKNOWN'
+        )),
+        session_status_before TEXT
+          CHECK (session_status_before IS NULL OR session_status_before IN ('active', 'expired', 'unknown')),
+        session_status_after TEXT
+          CHECK (session_status_after IS NULL OR session_status_after IN ('active', 'expired', 'unknown')),
+        cookie_count_before INTEGER,
+        cookie_count_after INTEGER,
+        duration_ms INTEGER,
+        trace_zip_path TEXT,
+        final_screenshot_path TEXT,
+        notes TEXT,
+        meta_json TEXT,
+        FOREIGN KEY (training_session_id) REFERENCES training_sessions(id) ON DELETE SET NULL
+      )
+    `);
+    db.exec(`
+      INSERT INTO runs_new (
+        id, training_session_id, started_at, finished_at, source, trigger,
+        outcome, failure_class, session_status_before, session_status_after,
+        cookie_count_before, cookie_count_after, duration_ms, trace_zip_path,
+        final_screenshot_path, notes, meta_json
+      )
+      SELECT
+        id, training_session_id, started_at, finished_at, source, trigger,
+        outcome, failure_class, session_status_before, session_status_after,
+        cookie_count_before, cookie_count_after, duration_ms, trace_zip_path,
+        final_screenshot_path, notes, meta_json
+      FROM runs
+    `);
+
+    db.exec(`
+      CREATE TABLE failures_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL,
+        occurred_at TEXT NOT NULL,
+        failure_class TEXT NOT NULL CHECK (failure_class IN (
+          'CAPTCHA_VISIBLE','OTP_REQUIRED','WRONG_CREDS','RATE_LIMITED',
+          'SELECTOR_NOT_FOUND','SELECTOR_STALE','NAVIGATION_TIMEOUT','NETWORK_ERROR',
+          'UNEXPECTED_POPUP','SESSION_NOT_DETECTED','BROWSER_CRASH','UNKNOWN'
+        )),
+        step TEXT,
+        selector_attempted TEXT,
+        error_message TEXT,
+        screenshot_path TEXT,
+        url TEXT,
+        console_tail TEXT,
+        network_status TEXT,
+        meta_json TEXT,
+        FOREIGN KEY (run_id) REFERENCES runs_new(id) ON DELETE CASCADE
+      )
+    `);
+    db.exec(`
+      INSERT INTO failures_new (
+        id, run_id, occurred_at, failure_class, step, selector_attempted,
+        error_message, screenshot_path, url, console_tail, network_status,
+        meta_json
+      )
+      SELECT
+        id, run_id, occurred_at, failure_class, step, selector_attempted,
+        error_message, screenshot_path, url, console_tail, network_status,
+        meta_json
+      FROM failures
+    `);
+
+    db.exec("DROP TABLE failures");
+    db.exec("DROP TABLE runs");
+    db.exec("ALTER TABLE runs_new RENAME TO runs");
+    db.exec("ALTER TABLE failures_new RENAME TO failures");
+
+    db.exec("CREATE INDEX IF NOT EXISTS idx_runs_started_at  ON runs(started_at DESC)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_runs_outcome     ON runs(outcome)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_runs_training    ON runs(training_session_id)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_runs_source      ON runs(source)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_failures_class   ON failures(failure_class, occurred_at DESC)");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_failures_run     ON failures(run_id)");
+
+    db.exec("COMMIT");
+    logger.info("bba-memory: migrated runs+failures with failure_class CHECK");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
   }
 }
 
