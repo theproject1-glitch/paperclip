@@ -27,6 +27,9 @@ export {
   claimIdempotencyKey,
   getIdempotencyKey,
   putIdempotencyKey,
+  deleteIdempotentForCompany,
+  getIdempotencyReplayCount,
+  __resetMetricsForTests,
   safeParseMetaJson,
   // selectors
   getSelectorsByPurpose,
