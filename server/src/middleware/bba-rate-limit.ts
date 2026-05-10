@@ -9,6 +9,10 @@ type Bucket = {
 };
 
 const buckets = new Map<string, Bucket>();
+
+// PROCESS-LOCAL counter — resets on server restart. In multi-instance
+// deployments, each Node.js process holds its own counter; aggregate
+// via Prometheus with a `pod` label to avoid double-counting.
 let _rateLimitedCount = 0;
 
 export function bbaRateLimiter(): RequestHandler {

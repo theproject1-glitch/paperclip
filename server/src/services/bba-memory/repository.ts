@@ -34,6 +34,10 @@ import type {
 } from "./types.js";
 
 const nowIso = () => new Date().toISOString();
+
+// PROCESS-LOCAL counter — resets on server restart. In multi-instance
+// deployments, each Node.js process holds its own counter; aggregate
+// via Prometheus with a `pod` label to avoid double-counting.
 let _idempotencyReplays = 0;
 
 // ---------------------------------------------------------------------------

@@ -58,6 +58,10 @@ export function bbaMemoryRoutes() {
   });
 
   router.get("/companies/:companyId/bba-memory/metrics", (req, res) => {
+    // NOTE: bba_idempotency_replays_total and bba_rate_limited_total are
+    // process-local counters. They reset on restart and are NOT shared
+    // across multiple Node.js processes. Configure Prometheus scrape with
+    // a per-pod label for multi-instance deployments.
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
