@@ -9,6 +9,7 @@ import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
 import { privateHostnameGuard, resolvePrivateHostnameAllowSet } from "./middleware/private-hostname-guard.js";
+import { requestIdMiddleware } from "./middleware/request-id.js";
 import { healthRoutes } from "./routes/health.js";
 import { companyRoutes } from "./routes/companies.js";
 import { companySkillRoutes } from "./routes/company-skills.js";
@@ -139,6 +140,7 @@ export async function createApp(
 ) {
   const app = express();
 
+  app.use(requestIdMiddleware());
   app.use(express.json({
     // Company import/export payloads can inline full portable packages.
     limit: "10mb",

@@ -11,6 +11,7 @@ import { assertCompanyAccess } from "./authz.js";
 import { unprocessable } from "../errors.js";
 import { getIdempotencyKey, putIdempotencyKey } from "../services/bba-memory/index.js";
 import { bbaRateLimiter } from "../middleware/bba-rate-limit.js";
+import { logger } from "../middleware/logger.js";
 
 function requireObject(value: unknown, label: string) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -162,129 +163,166 @@ export function bettingBrowserAutomationRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     executeRateLimiter(req, res, next);
   }, async (req, res) => {
+    const startMs = Date.now();
     const companyId = req.params.companyId as string;
+    let idempotencyKey: string | null = null;
 
-    const rawKey = req.headers["idempotency-key"];
-    const idempotencyKey =
-      typeof rawKey === "string" && rawKey.length > 0 && rawKey.length <= 128
-        ? rawKey
-        : null;
-    const inFlightKey = idempotencyKey ? `${companyId}:${idempotencyKey}` : null;
-    if (idempotencyKey) {
-      const cached = getIdempotencyKey(idempotencyKey);
-      if (cached && cached.company_id === companyId) {
-        res.setHeader("X-Idempotent-Replay", "true");
-        return res.json(JSON.parse(cached.response_json));
-      }
-    }
-
-    const executeOnce = async () => {
-      const body = requireObject(req.body, "body");
-      const bookmakerConfig = requireObject(body.bookmakerConfig, "bookmakerConfig");
-      const rawBet = body.bet != null ? requireObject(body.bet, "bet") : null;
-      const rawBets = Array.isArray(body.bets) && body.bets.length > 0 ? body.bets : null;
-      if (!rawBet && !rawBets) throw unprocessable("Either bet or bets is required.");
-      const bet = rawBet ?? rawBets![0]!;
-      const riskControls = requireObject(body.riskControls, "riskControls");
-      const loginUsername = requireObject(body.loginUsername, "loginUsername");
-      const loginPassword = requireObject(body.loginPassword, "loginPassword");
-
-      function parseBetObject(b: Record<string, unknown>, label: string) {
-        return {
-          predictionId: typeof b.predictionId === "string" ? b.predictionId : null,
-          matchLabel: requireString(b.matchLabel, `${label}.matchLabel`),
-          market: requireString(b.market, `${label}.market`),
-          selection: requireString(b.selection, `${label}.selection`),
-          selectionHint: typeof b.selectionHint === "string" ? b.selectionHint : null,
-          marketHint: typeof b.marketHint === "string" ? b.marketHint : null,
-          odds: requireNumber(b.odds, `${label}.odds`),
-          stake: requireNumber(b.stake, `${label}.stake`),
-          currency: typeof b.currency === "string" ? b.currency : null,
-          eventUrl: typeof b.eventUrl === "string" ? b.eventUrl : null,
-          searchQuery: typeof b.searchQuery === "string" ? b.searchQuery : null,
-        };
-      }
-
-      const execution = normalizeExecutionForPreAuth(parseExecution(body.execution));
-
-      const result = await svc.execute({
+    function logCompleted(result: unknown, wasReplay: boolean) {
+      logger.info({
+        requestId: req.requestId,
         companyId,
-        issueId: typeof body.issueId === "string" ? body.issueId : null,
-        currentBalance: typeof body.currentBalance === "number" ? body.currentBalance : null,
-        sessionStartedAt: typeof body.sessionStartedAt === "string" ? body.sessionStartedAt : null,
-        loginUsername: {
-          secretId: typeof loginUsername.secretId === "string" ? loginUsername.secretId : null,
-          secretName: typeof loginUsername.secretName === "string" ? loginUsername.secretName : null,
-        },
-        loginPassword: {
-          secretId: typeof loginPassword.secretId === "string" ? loginPassword.secretId : null,
-          secretName: typeof loginPassword.secretName === "string" ? loginPassword.secretName : null,
-        },
-        bookmakerConfig: {
-          bookmaker: requireString(bookmakerConfig.bookmaker, "bookmakerConfig.bookmaker"),
-          baseUrl: requireString(bookmakerConfig.baseUrl, "bookmakerConfig.baseUrl"),
-          loginUrl: requireString(bookmakerConfig.loginUrl, "bookmakerConfig.loginUrl"),
-          postLoginUrl: typeof bookmakerConfig.postLoginUrl === "string" ? bookmakerConfig.postLoginUrl : null,
-          historyUrl: typeof bookmakerConfig.historyUrl === "string" ? bookmakerConfig.historyUrl : null,
-          username: requireObject(bookmakerConfig.username, "bookmakerConfig.username") as any,
-          password: requireObject(bookmakerConfig.password, "bookmakerConfig.password") as any,
-          loginSubmit: requireObject(bookmakerConfig.loginSubmit, "bookmakerConfig.loginSubmit") as any,
-          loginSuccess: bookmakerConfig.loginSuccess ? requireObject(bookmakerConfig.loginSuccess, "bookmakerConfig.loginSuccess") as any : undefined,
-          loginFailure: bookmakerConfig.loginFailure ? requireObject(bookmakerConfig.loginFailure, "bookmakerConfig.loginFailure") as any : undefined,
-          cookieAccept: bookmakerConfig.cookieAccept ? requireObject(bookmakerConfig.cookieAccept, "bookmakerConfig.cookieAccept") as any : undefined,
-          popupClose: bookmakerConfig.popupClose ? requireObject(bookmakerConfig.popupClose, "bookmakerConfig.popupClose") as any : undefined,
-          searchInput: bookmakerConfig.searchInput ? requireObject(bookmakerConfig.searchInput, "bookmakerConfig.searchInput") as any : undefined,
-          searchSubmit: bookmakerConfig.searchSubmit ? requireObject(bookmakerConfig.searchSubmit, "bookmakerConfig.searchSubmit") as any : undefined,
-          searchResult: bookmakerConfig.searchResult ? requireObject(bookmakerConfig.searchResult, "bookmakerConfig.searchResult") as any : undefined,
-          marketGroup: bookmakerConfig.marketGroup ? requireObject(bookmakerConfig.marketGroup, "bookmakerConfig.marketGroup") as any : undefined,
-          selectionButton: requireObject(bookmakerConfig.selectionButton, "bookmakerConfig.selectionButton") as any,
-          stakeInput: requireObject(bookmakerConfig.stakeInput, "bookmakerConfig.stakeInput") as any,
-          reviewButton: requireObject(bookmakerConfig.reviewButton, "bookmakerConfig.reviewButton") as any,
-          submitButton: bookmakerConfig.submitButton ? requireObject(bookmakerConfig.submitButton, "bookmakerConfig.submitButton") as any : undefined,
-          receiptSuccess: bookmakerConfig.receiptSuccess ? requireObject(bookmakerConfig.receiptSuccess, "bookmakerConfig.receiptSuccess") as any : undefined,
-          reviewSummary: bookmakerConfig.reviewSummary ? requireObject(bookmakerConfig.reviewSummary, "bookmakerConfig.reviewSummary") as any : undefined,
-          historyReady: bookmakerConfig.historyReady ? requireObject(bookmakerConfig.historyReady, "bookmakerConfig.historyReady") as any : undefined,
-          historySelection: bookmakerConfig.historySelection ? requireObject(bookmakerConfig.historySelection, "bookmakerConfig.historySelection") as any : undefined,
-        },
-        bet: parseBetObject(bet as Record<string, unknown>, "bet"),
-        ...(rawBets ? {
-          bets: rawBets.map((b: unknown, i: number) => parseBetObject(requireObject(b, `bets[${i}]`), `bets[${i}]`)),
-        } : {}),
-        riskControls: {
-          maxStakePerBet: requireNumber(riskControls.maxStakePerBet, "riskControls.maxStakePerBet"),
-          maxTotalStakePerSession: requireNumber(riskControls.maxTotalStakePerSession, "riskControls.maxTotalStakePerSession"),
-          requireFinalConfirmation:
-            typeof riskControls.requireFinalConfirmation === "boolean"
-              ? riskControls.requireFinalConfirmation
-              : true,
-          dailyStopLossPct:
-            typeof riskControls.dailyStopLossPct === "number" ? riskControls.dailyStopLossPct : undefined,
-          sessionStopLossPct:
-            typeof riskControls.sessionStopLossPct === "number" ? riskControls.sessionStopLossPct : undefined,
-        },
-        execution,
-      });
-
-      if (idempotencyKey) {
-        putIdempotencyKey(idempotencyKey, companyId, JSON.stringify(result));
-      }
-      return result;
-    };
-
-    if (inFlightKey) {
-      const existing = inFlightIdempotency.get(inFlightKey);
-      if (existing) {
-        res.setHeader("X-Idempotent-Replay", "true");
-        return res.json(await existing);
-      }
-      const execution = executeOnce().finally(() => {
-        inFlightIdempotency.delete(inFlightKey);
-      });
-      inFlightIdempotency.set(inFlightKey, execution);
-      return res.json(await execution);
+        idempotencyKeyPrefix: idempotencyKey?.slice(0, 8),
+        wasReplay,
+        durationMs: Date.now() - startMs,
+        outcome:
+          typeof result === "object" && result !== null && "status" in result
+            ? (result as { status?: unknown }).status
+            : undefined,
+      }, "bba-execute completed");
     }
 
-    res.json(await executeOnce());
+    try {
+      const rawKey = req.headers["idempotency-key"];
+      idempotencyKey =
+        typeof rawKey === "string" && rawKey.length > 0 && rawKey.length <= 128
+          ? rawKey
+          : null;
+      const inFlightKey = idempotencyKey ? `${companyId}:${idempotencyKey}` : null;
+      if (idempotencyKey) {
+        const cached = getIdempotencyKey(idempotencyKey);
+        if (cached && cached.company_id === companyId) {
+          const result = JSON.parse(cached.response_json);
+          res.setHeader("X-Idempotent-Replay", "true");
+          logCompleted(result, true);
+          return res.json(result);
+        }
+      }
+
+      const executeOnce = async () => {
+        const body = requireObject(req.body, "body");
+        const bookmakerConfig = requireObject(body.bookmakerConfig, "bookmakerConfig");
+        const rawBet = body.bet != null ? requireObject(body.bet, "bet") : null;
+        const rawBets = Array.isArray(body.bets) && body.bets.length > 0 ? body.bets : null;
+        if (!rawBet && !rawBets) throw unprocessable("Either bet or bets is required.");
+        const bet = rawBet ?? rawBets![0]!;
+        const riskControls = requireObject(body.riskControls, "riskControls");
+        const loginUsername = requireObject(body.loginUsername, "loginUsername");
+        const loginPassword = requireObject(body.loginPassword, "loginPassword");
+
+        function parseBetObject(b: Record<string, unknown>, label: string) {
+          return {
+            predictionId: typeof b.predictionId === "string" ? b.predictionId : null,
+            matchLabel: requireString(b.matchLabel, `${label}.matchLabel`),
+            market: requireString(b.market, `${label}.market`),
+            selection: requireString(b.selection, `${label}.selection`),
+            selectionHint: typeof b.selectionHint === "string" ? b.selectionHint : null,
+            marketHint: typeof b.marketHint === "string" ? b.marketHint : null,
+            odds: requireNumber(b.odds, `${label}.odds`),
+            stake: requireNumber(b.stake, `${label}.stake`),
+            currency: typeof b.currency === "string" ? b.currency : null,
+            eventUrl: typeof b.eventUrl === "string" ? b.eventUrl : null,
+            searchQuery: typeof b.searchQuery === "string" ? b.searchQuery : null,
+          };
+        }
+
+        const execution = normalizeExecutionForPreAuth(parseExecution(body.execution));
+
+        const result = await svc.execute({
+          companyId,
+          issueId: typeof body.issueId === "string" ? body.issueId : null,
+          currentBalance: typeof body.currentBalance === "number" ? body.currentBalance : null,
+          sessionStartedAt: typeof body.sessionStartedAt === "string" ? body.sessionStartedAt : null,
+          loginUsername: {
+            secretId: typeof loginUsername.secretId === "string" ? loginUsername.secretId : null,
+            secretName: typeof loginUsername.secretName === "string" ? loginUsername.secretName : null,
+          },
+          loginPassword: {
+            secretId: typeof loginPassword.secretId === "string" ? loginPassword.secretId : null,
+            secretName: typeof loginPassword.secretName === "string" ? loginPassword.secretName : null,
+          },
+          bookmakerConfig: {
+            bookmaker: requireString(bookmakerConfig.bookmaker, "bookmakerConfig.bookmaker"),
+            baseUrl: requireString(bookmakerConfig.baseUrl, "bookmakerConfig.baseUrl"),
+            loginUrl: requireString(bookmakerConfig.loginUrl, "bookmakerConfig.loginUrl"),
+            postLoginUrl: typeof bookmakerConfig.postLoginUrl === "string" ? bookmakerConfig.postLoginUrl : null,
+            historyUrl: typeof bookmakerConfig.historyUrl === "string" ? bookmakerConfig.historyUrl : null,
+            username: requireObject(bookmakerConfig.username, "bookmakerConfig.username") as any,
+            password: requireObject(bookmakerConfig.password, "bookmakerConfig.password") as any,
+            loginSubmit: requireObject(bookmakerConfig.loginSubmit, "bookmakerConfig.loginSubmit") as any,
+            loginSuccess: bookmakerConfig.loginSuccess ? requireObject(bookmakerConfig.loginSuccess, "bookmakerConfig.loginSuccess") as any : undefined,
+            loginFailure: bookmakerConfig.loginFailure ? requireObject(bookmakerConfig.loginFailure, "bookmakerConfig.loginFailure") as any : undefined,
+            cookieAccept: bookmakerConfig.cookieAccept ? requireObject(bookmakerConfig.cookieAccept, "bookmakerConfig.cookieAccept") as any : undefined,
+            popupClose: bookmakerConfig.popupClose ? requireObject(bookmakerConfig.popupClose, "bookmakerConfig.popupClose") as any : undefined,
+            searchInput: bookmakerConfig.searchInput ? requireObject(bookmakerConfig.searchInput, "bookmakerConfig.searchInput") as any : undefined,
+            searchSubmit: bookmakerConfig.searchSubmit ? requireObject(bookmakerConfig.searchSubmit, "bookmakerConfig.searchSubmit") as any : undefined,
+            searchResult: bookmakerConfig.searchResult ? requireObject(bookmakerConfig.searchResult, "bookmakerConfig.searchResult") as any : undefined,
+            marketGroup: bookmakerConfig.marketGroup ? requireObject(bookmakerConfig.marketGroup, "bookmakerConfig.marketGroup") as any : undefined,
+            selectionButton: requireObject(bookmakerConfig.selectionButton, "bookmakerConfig.selectionButton") as any,
+            stakeInput: requireObject(bookmakerConfig.stakeInput, "bookmakerConfig.stakeInput") as any,
+            reviewButton: requireObject(bookmakerConfig.reviewButton, "bookmakerConfig.reviewButton") as any,
+            submitButton: bookmakerConfig.submitButton ? requireObject(bookmakerConfig.submitButton, "bookmakerConfig.submitButton") as any : undefined,
+            receiptSuccess: bookmakerConfig.receiptSuccess ? requireObject(bookmakerConfig.receiptSuccess, "bookmakerConfig.receiptSuccess") as any : undefined,
+            reviewSummary: bookmakerConfig.reviewSummary ? requireObject(bookmakerConfig.reviewSummary, "bookmakerConfig.reviewSummary") as any : undefined,
+            historyReady: bookmakerConfig.historyReady ? requireObject(bookmakerConfig.historyReady, "bookmakerConfig.historyReady") as any : undefined,
+            historySelection: bookmakerConfig.historySelection ? requireObject(bookmakerConfig.historySelection, "bookmakerConfig.historySelection") as any : undefined,
+          },
+          bet: parseBetObject(bet as Record<string, unknown>, "bet"),
+          ...(rawBets ? {
+            bets: rawBets.map((b: unknown, i: number) => parseBetObject(requireObject(b, `bets[${i}]`), `bets[${i}]`)),
+          } : {}),
+          riskControls: {
+            maxStakePerBet: requireNumber(riskControls.maxStakePerBet, "riskControls.maxStakePerBet"),
+            maxTotalStakePerSession: requireNumber(riskControls.maxTotalStakePerSession, "riskControls.maxTotalStakePerSession"),
+            requireFinalConfirmation:
+              typeof riskControls.requireFinalConfirmation === "boolean"
+                ? riskControls.requireFinalConfirmation
+                : true,
+            dailyStopLossPct:
+              typeof riskControls.dailyStopLossPct === "number" ? riskControls.dailyStopLossPct : undefined,
+            sessionStopLossPct:
+              typeof riskControls.sessionStopLossPct === "number" ? riskControls.sessionStopLossPct : undefined,
+          },
+          execution,
+        });
+
+        if (idempotencyKey) {
+          putIdempotencyKey(idempotencyKey, companyId, JSON.stringify(result));
+        }
+        return result;
+      };
+
+      if (inFlightKey) {
+        const existing = inFlightIdempotency.get(inFlightKey);
+        if (existing) {
+          const result = await existing;
+          res.setHeader("X-Idempotent-Replay", "true");
+          logCompleted(result, true);
+          return res.json(result);
+        }
+        const execution = executeOnce().finally(() => {
+          inFlightIdempotency.delete(inFlightKey);
+        });
+        inFlightIdempotency.set(inFlightKey, execution);
+        const result = await execution;
+        logCompleted(result, false);
+        return res.json(result);
+      }
+
+      const result = await executeOnce();
+      logCompleted(result, false);
+      res.json(result);
+    } catch (err) {
+      logger.warn({
+        requestId: req.requestId,
+        companyId,
+        idempotencyKeyPrefix: idempotencyKey?.slice(0, 8),
+        wasReplay: false,
+        durationMs: Date.now() - startMs,
+        errorClass: err instanceof Error ? err.constructor.name : typeof err,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      }, "bba-execute failed");
+      throw err;
+    }
   });
 
   return router;
