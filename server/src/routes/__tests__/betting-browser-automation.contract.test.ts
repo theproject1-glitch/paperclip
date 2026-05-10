@@ -7,6 +7,7 @@ import {
   type BbaTestAppHandle,
 } from "./_helpers/bba-contract-app.js";
 import { logger } from "../../middleware/logger.js";
+import { getIdempotencyReplayCount } from "../../services/bba-memory/index.js";
 
 let handle: BbaTestAppHandle;
 
@@ -235,5 +236,17 @@ describe.sequential("betting browser automation contract routes", () => {
     const replayCall = findLogCall(infoSpy, "bba-execute completed");
     expect(replayCall?.obj).toMatchObject({ wasReplay: true });
     expect(replayCall?.obj?.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+  });
+
+  it("cross-company idempotency-key collision does NOT increment replay counter", async () => {
+    const first = await postExecute("company-1").set("Idempotency-Key", "shared-abc");
+    const second = await postExecute("company-2").set("Idempotency-Key", "shared-abc");
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(first.headers["x-idempotent-replay"]).toBeUndefined();
+    expect(second.headers["x-idempotent-replay"]).toBeUndefined();
+    expect(handle.stubExecute).toHaveBeenCalledTimes(2);
+    expect(getIdempotencyReplayCount()).toBe(0);
   });
 });

@@ -78,7 +78,7 @@ describe.sequential("bba-memory repository", () => {
   it("putIdempotencyKey then getIdempotencyKey within 60s returns the row", () => {
     bbaMemory.putIdempotencyKey("key-1", "company-1", '{"status":"completed"}');
 
-    const row = bbaMemory.getIdempotencyKey("key-1");
+    const row = bbaMemory.getIdempotencyKey("key-1", "company-1");
 
     expect(row).toMatchObject({
       key: "key-1",
@@ -93,7 +93,7 @@ describe.sequential("bba-memory repository", () => {
     bbaMemory.putIdempotencyKey("key-expired", "company-1", "{}");
 
     nowSpy.mockReturnValue(now + 61_000);
-    expect(bbaMemory.getIdempotencyKey("key-expired")).toBeUndefined();
+    expect(bbaMemory.getIdempotencyKey("key-expired", "company-1")).toBeUndefined();
     const rows = bbaMemory.getDb()
       .prepare("SELECT * FROM idempotency_keys WHERE key = ?")
       .all("key-expired");

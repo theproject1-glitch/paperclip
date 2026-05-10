@@ -189,8 +189,8 @@ export function bettingBrowserAutomationRoutes(db: Db) {
           : null;
       const inFlightKey = idempotencyKey ? `${companyId}:${idempotencyKey}` : null;
       if (idempotencyKey) {
-        const cached = getIdempotencyKey(idempotencyKey);
-        if (cached && cached.company_id === companyId) {
+        const cached = getIdempotencyKey(idempotencyKey, companyId);
+        if (cached) {
           const result = JSON.parse(cached.response_json);
           res.setHeader("X-Idempotent-Replay", "true");
           logCompleted(result, true);

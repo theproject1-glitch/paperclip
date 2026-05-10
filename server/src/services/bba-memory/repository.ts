@@ -283,15 +283,18 @@ export interface IdempotencyRow {
 }
 
 /** Lazy GC: remove expired rows, then return the live row (or undefined). */
-export function getIdempotencyKey(key: string): IdempotencyRow | undefined {
+export function getIdempotencyKey(key: string, companyId: string): IdempotencyRow | undefined {
   const db = getDb();
   const cutoff = new Date(Date.now() - IDEMPOTENCY_TTL_MS).toISOString();
   db.prepare(`DELETE FROM idempotency_keys WHERE created_at < ?`).run(cutoff);
   const row = db
     .prepare(`SELECT * FROM idempotency_keys WHERE key = ?`)
     .get(key) as IdempotencyRow | undefined;
-  if (row) _idempotencyReplays += 1;
-  return row;
+  if (row && row.company_id === companyId) {
+    _idempotencyReplays += 1;
+    return row;
+  }
+  return undefined;
 }
 
 export function putIdempotencyKey(
