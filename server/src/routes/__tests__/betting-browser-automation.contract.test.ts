@@ -203,4 +203,37 @@ describe.sequential("betting browser automation contract routes", () => {
     expect(JSON.stringify(logObject)).not.toContain("Team A vs Team B");
     expect(JSON.stringify(logObject)).not.toContain('"selection"');
   });
+
+  it("Concurrent /execute with same Idempotency-Key emits exactly one non-replay bba-execute completed log", async () => {
+    const infoSpy = vi.spyOn(logger, "info");
+    handle.stubExecute.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve({
+        status: "completed",
+        placedBetId: "test-123",
+      }), 30)),
+    );
+
+    await Promise.all([
+      postExecute().set("Idempotency-Key", "log-concurrent-key"),
+      postExecute().set("Idempotency-Key", "log-concurrent-key"),
+    ]);
+
+    const freshLogCount = infoSpy.mock.calls.filter((call) => {
+      const [, msg] = call;
+      return msg === "bba-execute completed" && (call[0] as any).wasReplay === false;
+    }).length;
+    expect(freshLogCount).toBe(1);
+  });
+
+  it("Replay log includes wasReplay true and requestId", async () => {
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await postExecute().set("Idempotency-Key", "replay-request-id-key").expect(200);
+    infoSpy.mockClear();
+    await postExecute().set("Idempotency-Key", "replay-request-id-key").expect(200);
+
+    const replayCall = findLogCall(infoSpy, "bba-execute completed");
+    expect(replayCall?.obj).toMatchObject({ wasReplay: true });
+    expect(replayCall?.obj?.requestId).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/i));
+  });
 });
