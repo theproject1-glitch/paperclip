@@ -53,6 +53,21 @@ export function buildExecutePayload(overrides: Record<string, unknown> = {}): un
   };
 }
 
+export function findLogCall(
+  spy: ReturnType<typeof vi.spyOn>,
+  message: string,
+): { obj: Record<string, unknown> | null; msg: string } | null {
+  for (const call of spy.mock.calls) {
+    // pino signature: logger.info(obj, msg) OR logger.info(msg)
+    const [arg0, arg1] = call;
+    const captured = typeof arg0 === "string"
+      ? { obj: null, msg: arg0 }
+      : { obj: arg0 as Record<string, unknown>, msg: String(arg1 ?? "") };
+    if (captured.msg.includes(message)) return captured;
+  }
+  return null;
+}
+
 export async function createBbaTestApp(): Promise<BbaTestAppHandle> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bba-test-"));
   process.env.BBA_MEMORY_DIR = tmpDir;

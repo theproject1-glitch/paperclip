@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   buildExecutePayload,
   createBbaTestApp,
+  findLogCall,
   type BbaTestAppHandle,
 } from "./_helpers/bba-contract-app.js";
 import { logger } from "../../middleware/logger.js";
@@ -13,10 +14,6 @@ function postExecute(companyId = "company-1") {
   return request(handle.app)
     .post(`/api/companies/${companyId}/betting-browser-automation/execute`)
     .send(buildExecutePayload());
-}
-
-function findLogCall(spy: ReturnType<typeof vi.spyOn>, message: string) {
-  return spy.mock.calls.find((call) => call[1] === message);
 }
 
 describe.sequential("betting browser automation contract routes", () => {
@@ -151,25 +148,24 @@ describe.sequential("betting browser automation contract routes", () => {
     await postExecute().set("X-Request-ID", "req-log-happy").expect(200);
 
     const call = findLogCall(infoSpy, "bba-execute completed");
-    expect(call?.[0]).toMatchObject({
+    expect(call?.obj).toMatchObject({
       requestId: "req-log-happy",
       companyId: "company-1",
       wasReplay: false,
       outcome: "completed",
     });
-    expect(call?.[0]).toMatchObject({ durationMs: expect.any(Number) });
+    expect(call?.obj).toMatchObject({ durationMs: expect.any(Number) });
   });
 
   it("idempotency replay emits log with wasReplay true", async () => {
     const infoSpy = vi.spyOn(logger, "info");
 
     await postExecute().set("Idempotency-Key", "log-replay-key").expect(200);
+    infoSpy.mockClear();
     await postExecute().set("Idempotency-Key", "log-replay-key").expect(200);
 
-    const replayCall = infoSpy.mock.calls.find(
-      (call) => call[1] === "bba-execute completed" && (call[0] as any).wasReplay === true,
-    );
-    expect(replayCall?.[0]).toMatchObject({
+    const replayCall = findLogCall(infoSpy, "bba-execute completed");
+    expect(replayCall?.obj).toMatchObject({
       companyId: "company-1",
       idempotencyKeyPrefix: "log-repl",
       wasReplay: true,
@@ -185,7 +181,7 @@ describe.sequential("betting browser automation contract routes", () => {
 
     expect(res.status).toBe(500);
     const call = findLogCall(warnSpy, "bba-execute failed");
-    expect(call?.[0]).toMatchObject({
+    expect(call?.obj).toMatchObject({
       requestId: "req-log-error",
       companyId: "company-1",
       wasReplay: false,
@@ -200,7 +196,7 @@ describe.sequential("betting browser automation contract routes", () => {
     await postExecute().expect(200);
 
     const call = findLogCall(infoSpy, "bba-execute completed");
-    const logObject = call?.[0] as Record<string, unknown>;
+    const logObject = call?.obj as Record<string, unknown>;
     expect(logObject).not.toHaveProperty("bookmakerConfig");
     expect(logObject).not.toHaveProperty("loginUsername");
     expect(logObject).not.toHaveProperty("loginPassword");
