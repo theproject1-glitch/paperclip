@@ -186,7 +186,8 @@ export function listRecentRunsForCompany(companyId: string, limit = 100): RunRow
   return getDb()
     .prepare(
       `SELECT * FROM runs
-       WHERE json_extract(meta_json, '$.companyId') = ?
+       WHERE json_valid(meta_json)
+         AND json_extract(meta_json, '$.companyId') = ?
        ORDER BY started_at DESC
        LIMIT ?`,
     )
@@ -217,7 +218,8 @@ export function getCompanyStatsSummary(companyId: string, windowDays = 7): Compa
          COUNT(CASE WHEN outcome = 'failure' THEN 1 END) AS failureCount,
          COUNT(CASE WHEN outcome = 'partial'  THEN 1 END) AS partialCount
        FROM runs
-       WHERE json_extract(meta_json, '$.companyId') = ?
+       WHERE json_valid(meta_json)
+         AND json_extract(meta_json, '$.companyId') = ?
          AND started_at >= ?`,
     )
     .get(companyId, cutoff) as {
@@ -231,7 +233,8 @@ export function getCompanyStatsSummary(companyId: string, windowDays = 7): Compa
     .prepare(
       `SELECT failure_class AS class, COUNT(*) AS count
        FROM runs
-       WHERE json_extract(meta_json, '$.companyId') = ?
+       WHERE json_valid(meta_json)
+         AND json_extract(meta_json, '$.companyId') = ?
          AND started_at >= ?
          AND failure_class IS NOT NULL
        GROUP BY failure_class

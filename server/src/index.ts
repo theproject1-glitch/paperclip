@@ -44,6 +44,11 @@ import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-
 import { maybePersistWorktreeRuntimePorts } from "./worktree-config.js";
 import { initTelemetry, getTelemetryClient } from "./telemetry.js";
 import { conflict } from "./errors.js";
+import { initBbaMemory } from "./services/bba-memory/index.js";
+import {
+  startBbaSessionKeepalive,
+  stopBbaSessionKeepalive,
+} from "./services/bba-session-keepalive.js";
 import type {
   InstanceDatabaseBackupRunResult,
   InstanceDatabaseBackupTrigger,
@@ -592,6 +597,7 @@ export async function startServer(): Promise<StartedServer> {
       databaseBackupInFlight = false;
     }
   };
+  initBbaMemory();
   const pluginWorkerManager = createPluginWorkerManager();
   const app = await createApp(db as any, {
     uiMode,
@@ -866,12 +872,18 @@ export async function startServer(): Promise<StartedServer> {
         );
       }
 
+      if (process.env.NODE_ENV !== "test") {
+        startBbaSessionKeepalive();
+      }
+
       resolveListen();
     });
   });
   
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
+      stopBbaSessionKeepalive();
+
       const telemetryClient = getTelemetryClient();
       if (telemetryClient) {
         telemetryClient.stop();

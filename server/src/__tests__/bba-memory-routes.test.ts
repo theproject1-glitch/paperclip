@@ -130,6 +130,17 @@ describe("bba-memory routes", () => {
     expect(res.body.runs.every((r: any) => r.meta?.companyId === "company-bbm")).toBe(true);
   });
 
+  it("recent-runs tolerates corrupt meta_json without returning 500", async () => {
+    getDb().exec("DELETE FROM runs");
+    const id = startRun({ source: "manual", trigger: "issue:bad-meta" });
+    completeRun(id, { outcome: "success", meta: { companyId: "company-bbm" } });
+    getDb().prepare("UPDATE runs SET meta_json = ? WHERE id = ?").run("{bad-json", id);
+
+    const res = await request(app).get("/api/companies/company-bbm/bba-memory/recent-runs");
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBe(0);
+  });
+
   it("recent-runs ?all=true is ignored for non-admin (returns company-filtered results)", async () => {
     getDb().exec("DELETE FROM runs");
     const a1 = startRun({ source: "manual", trigger: "issue:A1" });
