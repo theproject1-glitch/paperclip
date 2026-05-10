@@ -91,6 +91,15 @@ export function bbaMemoryRoutes() {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
+    const actor = (req as any).actor;
+    const isAdmin = actor?.type === "board" && actor?.isInstanceAdmin === true;
+    if (!isAdmin) {
+      return res.status(403).json({
+        error: "forbidden",
+        reason: "DELETE /idempotency-keys requires instance-admin role.",
+      });
+    }
+
     const deleted = deleteIdempotentForCompany(companyId);
     logger.info(`bba-memory: idempotency keys cleared for ${companyId}: ${deleted}`);
     res.json({ deleted });

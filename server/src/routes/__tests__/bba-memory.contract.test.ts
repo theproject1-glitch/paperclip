@@ -146,4 +146,36 @@ describe.sequential("bba-memory contract routes", () => {
     expect(res.body).toEqual({ deleted: 1 });
     expect(remaining.map((r) => r.company_id)).toEqual(["company-2"]);
   });
+
+  it("non-admin company member cannot DELETE /idempotency-keys", async () => {
+    handle.setActor({
+      type: "board",
+      userId: "user-2",
+      companyIds: ["company-1"],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+    bbaMemory.putIdempotencyKey("company-1-key", "company-1", "{}");
+
+    const res = await request(handle.app).delete("/api/companies/company-1/bba-memory/idempotency-keys");
+    const remaining = bbaMemory.getDb()
+      .prepare("SELECT key FROM idempotency_keys WHERE company_id = ?")
+      .all("company-1");
+
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({
+      error: "forbidden",
+      reason: "DELETE /idempotency-keys requires instance-admin role.",
+    });
+    expect(remaining).toHaveLength(1);
+  });
+
+  it("instance-admin can DELETE /idempotency-keys", async () => {
+    bbaMemory.putIdempotencyKey("company-1-key", "company-1", "{}");
+
+    const res = await request(handle.app).delete("/api/companies/company-1/bba-memory/idempotency-keys");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: 1 });
+  });
 });

@@ -11,9 +11,18 @@ export interface BbaTestAppHandle {
   stubExecute: ReturnType<typeof vi.fn>;
   cleanup: () => void;
   reset: () => Promise<void>;
+  setActor: (actor: BbaTestActor) => void;
 }
 
-const actor = {
+export type BbaTestActor = {
+  type: "board";
+  userId: string;
+  companyIds: string[];
+  source: "session";
+  isInstanceAdmin?: boolean;
+};
+
+const defaultActor: BbaTestActor = {
   type: "board",
   userId: "user-1",
   companyIds: ["company-1", "company-2"],
@@ -71,6 +80,7 @@ export function findLogCall(
 export async function createBbaTestApp(): Promise<BbaTestAppHandle> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bba-test-"));
   process.env.BBA_MEMORY_DIR = tmpDir;
+  let currentActor = { ...defaultActor };
 
   vi.doMock("../../../services/betting-browser-automation.js", () => ({
     bettingBrowserAutomationService: () => ({ execute: stubExecute }),
@@ -91,7 +101,7 @@ export async function createBbaTestApp(): Promise<BbaTestAppHandle> {
   app.use(requestIdMiddleware());
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = actor;
+    (req as any).actor = currentActor;
     next();
   });
   app.use("/api", bbaMemoryRoutes());
@@ -106,7 +116,11 @@ export async function createBbaTestApp(): Promise<BbaTestAppHandle> {
       bbaMemory.closeBbaMemory();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     },
+    setActor: (actor) => {
+      currentActor = actor;
+    },
     reset: async () => {
+      currentActor = { ...defaultActor };
       bbaMemory.getDb().exec(`
         DELETE FROM failures;
         DELETE FROM popups_seen;
