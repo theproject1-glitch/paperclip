@@ -260,3 +260,10 @@ export function stopBbaSessionKeepalive() {
     logger.info("bba-keepalive: stopped");
   }
 }
+
+export const __bbaKeepaliveTestHooks = {
+  OVERLAY_SELECTORS,
+  KEEPALIVE_INTERVAL_MS,
+  dismissOverlays,
+  attemptAutofillRelogin,
+};
