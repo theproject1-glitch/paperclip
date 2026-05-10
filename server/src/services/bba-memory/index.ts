@@ -43,6 +43,9 @@ export {
   // idempotency
   getIdempotencyKey,
   putIdempotencyKey,
+  deleteIdempotentForCompany,
+  getIdempotencyReplayCount,
+  __resetMetricsForTests,
   // helpers
   safeParseMetaJson,
 } from "./repository.js";

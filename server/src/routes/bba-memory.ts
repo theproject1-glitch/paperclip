@@ -3,9 +3,13 @@ import {
   listRecentRuns,
   listRecentRunsForCompany,
   getCompanyStatsSummary,
+  getIdempotencyReplayCount,
+  deleteIdempotentForCompany,
   safeParseMetaJson,
 } from "../services/bba-memory/index.js";
 import { assertCompanyAccess } from "./authz.js";
+import { getRateLimitedCount } from "../middleware/bba-rate-limit.js";
+import { logger } from "../middleware/logger.js";
 
 export function bbaMemoryRoutes() {
   const router = Router();
@@ -51,6 +55,41 @@ export function bbaMemoryRoutes() {
     const windowDays = !Number.isFinite(parsed) || parsed <= 0 ? 7 : Math.min(parsed, 90);
 
     res.json(getCompanyStatsSummary(companyId, windowDays));
+  });
+
+  router.get("/companies/:companyId/bba-memory/metrics", (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    const stats = getCompanyStatsSummary(companyId, 7);
+    const labelCompanyId = companyId.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const lines = [
+      "# HELP bba_idempotency_replays_total /execute calls served from cache.",
+      "# TYPE bba_idempotency_replays_total counter",
+      `bba_idempotency_replays_total ${getIdempotencyReplayCount()}`,
+      "",
+      "# HELP bba_rate_limited_total /execute calls rejected by rate limiter.",
+      "# TYPE bba_rate_limited_total counter",
+      `bba_rate_limited_total ${getRateLimitedCount()}`,
+      "",
+      "# HELP bba_runs_total Runs by outcome (rolling 7d, scoped to company).",
+      "# TYPE bba_runs_total counter",
+      `bba_runs_total{company_id="${labelCompanyId}",outcome="success"} ${stats.successCount}`,
+      `bba_runs_total{company_id="${labelCompanyId}",outcome="failure"} ${stats.failureCount}`,
+      `bba_runs_total{company_id="${labelCompanyId}",outcome="partial"} ${stats.partialCount}`,
+      "",
+    ];
+
+    res.type("text/plain; charset=utf-8").send(lines.join("\n"));
+  });
+
+  router.delete("/companies/:companyId/bba-memory/idempotency-keys", (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    const deleted = deleteIdempotentForCompany(companyId);
+    logger.info(`bba-memory: idempotency keys cleared for ${companyId}: ${deleted}`);
+    res.json({ deleted });
   });
 
   return router;
