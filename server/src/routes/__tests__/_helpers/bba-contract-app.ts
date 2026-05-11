@@ -32,7 +32,9 @@ const defaultActor: BbaTestActor = {
 
 const stubExecute = vi.fn();
 
-export function buildExecutePayload(overrides: Record<string, unknown> = {}): unknown {
+export function buildExecutePayload(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     loginUsername: { secretName: "BBA_USERNAME" },
     loginPassword: { secretName: "BBA_PASSWORD" },

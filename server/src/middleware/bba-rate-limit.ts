@@ -17,7 +17,8 @@ let _rateLimitedCount = 0;
 
 export function bbaRateLimiter(): RequestHandler {
   return (req, res, next) => {
-    const companyId = req.params.companyId;
+    const rawCompanyId = req.params.companyId;
+    const companyId = Array.isArray(rawCompanyId) ? rawCompanyId[0] : rawCompanyId;
     if (!companyId) {
       next();
       return;
