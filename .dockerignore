@@ -8,3 +8,16 @@ coverage
 data
 tmp
 *.log
+**/*.log
+.env
+.env.*
+!.env.example
+!.env.production.example
+.DS_Store
+coverage
+**/coverage
+ui/dist
+server/dist
+packages/*/dist
+packages/*/*/dist
+*.tsbuildinfo
