@@ -1,0 +1,31 @@
+services:
+  paperclip:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/theproject1-glitch/paperclip:local
+    restart: unless-stopped
+    env_file:
+      - path: .env.production
+        required: false
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3100"
+      PAPERCLIP_HOME: "/paperclip"
+      PAPERCLIP_INSTANCE_ID: "${PAPERCLIP_INSTANCE_ID:-default}"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3000}"
+      PAPERCLIP_DEPLOYMENT_MODE: "${PAPERCLIP_DEPLOYMENT_MODE:-authenticated}"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      BBA_MEMORY_DIR: "/paperclip/.paperclip/bba-memory"
+    ports:
+      - "${PAPERCLIP_PORT:-3000}:3100"
+    volumes:
+      - "${PAPERCLIP_HOST_HOME:-~/.paperclip}:/paperclip"
+      - "${BBA_CHROMIUM_PROFILE_DIR:-~/.paperclip/bba-playwright-profile}:/paperclip/.paperclip/bba-playwright-profile"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:3100/api/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
