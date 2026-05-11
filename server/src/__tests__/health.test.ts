@@ -48,6 +48,24 @@ describe("GET /health", () => {
     expect(res.body).toMatchObject({ status: "ok", version: serverVersion });
   });
 
+  it("returns deep health with database connectivity metadata", async () => {
+    const db = {
+      execute: vi.fn().mockResolvedValue([{ "?column?": 1 }]),
+    } as unknown as Db;
+    const app = createApp(db);
+
+    const res = await request(app).get("/health/deep");
+
+    expect(res.status).toBe(200);
+    expect(db.execute).toHaveBeenCalledTimes(1);
+    expect(res.body).toMatchObject({
+      status: "ok",
+      db_connected: true,
+    });
+    expect(res.body.master_sha).toEqual(expect.any(String));
+    expect(res.body.uptime_ms).toEqual(expect.any(Number));
+  });
+
   it("returns 503 when the database probe fails", async () => {
     const db = {
       execute: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED")),
