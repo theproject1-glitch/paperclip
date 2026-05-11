@@ -35,12 +35,12 @@
     "dev": "tsx src/index.ts",
     "dev:watch": "cross-env PAPERCLIP_MIGRATION_PROMPT=never PAPERCLIP_MIGRATION_AUTO_APPLY=true tsx ./scripts/dev-watch.ts",
     "prepare:ui-dist": "bash ../scripts/prepare-server-ui-dist.sh",
-    "build": "tsc && node -e \"const fs=require('fs');fs.mkdirSync('dist/onboarding-assets',{recursive:true});fs.cpSync('src/onboarding-assets','dist/onboarding-assets',{recursive:true})\"",
+    "build": "pnpm --filter @paperclipai/plugin-sdk build && tsc && node -e \"const fs=require('fs');fs.mkdirSync('dist/onboarding-assets',{recursive:true});fs.cpSync('src/onboarding-assets','dist/onboarding-assets',{recursive:true})\"",
     "prepack": "pnpm run prepare:ui-dist",
     "postpack": "rm -rf ui-dist",
     "clean": "rm -rf dist",
     "start": "node dist/index.js",
-    "typecheck": "pnpm --filter @paperclipai/plugin-sdk ensure-build-deps && tsc --noEmit"
+    "typecheck": "pnpm --filter @paperclipai/plugin-sdk build && tsc --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.888.0",
