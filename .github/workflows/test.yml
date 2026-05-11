@@ -1,0 +1,72 @@
+name: Production Readiness Test
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-readiness-test-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build plugin SDK type surface
+        run: pnpm --filter @paperclipai/plugin-sdk build
+
+      - name: Typecheck server
+        run: pnpm --filter @paperclipai/server typecheck
+
+      - name: Run server BBA tests
+        env:
+          CI: "1"
+        run: |
+          pnpm --filter @paperclipai/server exec vitest run \
+            src/__tests__/bba-memory-repository.test.ts \
+            src/__tests__/bba-memory-instrumentation.test.ts \
+            src/__tests__/bba-memory-routes.test.ts \
+            src/__tests__/bba-session-keepalive.test.ts \
+            src/__tests__/betting-browser-automation-route-bba-memory.e2e.test.ts \
+            src/__tests__/betting-browser-automation-route.test.ts \
+            src/routes/__tests__ \
+            src/services/bba-memory/__tests__ \
+            src/middleware/__tests__ \
+            --reporter=dot --pool=forks --maxWorkers=1
+
+      - name: Run UI tests
+        env:
+          CI: "1"
+        run: pnpm --filter @paperclipai/ui test -- --run
+
+      - name: Build server
+        run: pnpm --filter @paperclipai/server build
+
+      - name: Build UI
+        run: pnpm --filter @paperclipai/ui build
