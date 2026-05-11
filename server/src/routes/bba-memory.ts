@@ -15,6 +15,7 @@ export function bbaMemoryRoutes() {
   const router = Router();
 
   router.get("/companies/:companyId/bba-memory/recent-runs", (req, res) => {
+    const startMs = Date.now();
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
@@ -30,6 +31,17 @@ export function bbaMemoryRoutes() {
     const wantsAll = req.query.all === "true";
     const isAdmin = actor?.type === "board" && actor?.isInstanceAdmin === true;
     const runs = wantsAll && isAdmin ? listRecentRuns(safeLimit) : listRecentRunsForCompany(companyId, safeLimit);
+
+    logger.info({
+      requestId: req.requestId,
+      companyId,
+      endpoint: "bba-memory.recent-runs",
+      limit: safeLimit,
+      wantsAll,
+      isAdmin,
+      total: runs.length,
+      durationMs: Date.now() - startMs,
+    }, "bba-memory recent-runs completed");
 
     res.json({
       companyId,
@@ -50,6 +62,7 @@ export function bbaMemoryRoutes() {
   });
 
   router.get("/companies/:companyId/bba-memory/stats-summary", (req, res) => {
+    const startMs = Date.now();
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
@@ -57,10 +70,20 @@ export function bbaMemoryRoutes() {
     const parsed = typeof windowRaw === "string" ? parseInt(windowRaw, 10) : NaN;
     const windowDays = !Number.isFinite(parsed) || parsed <= 0 ? 7 : Math.min(parsed, 90);
 
-    res.json(getCompanyStatsSummary(companyId, windowDays));
+    const summary = getCompanyStatsSummary(companyId, windowDays);
+    logger.info({
+      requestId: req.requestId,
+      companyId,
+      endpoint: "bba-memory.stats-summary",
+      windowDays,
+      durationMs: Date.now() - startMs,
+    }, "bba-memory stats-summary completed");
+
+    res.json(summary);
   });
 
   router.get("/companies/:companyId/bba-memory/metrics", (req, res) => {
+    const startMs = Date.now();
     // NOTE: bba_idempotency_replays_total and bba_rate_limited_total are
     // process-local counters. They reset on restart and are NOT shared
     // across multiple Node.js processes. Configure Prometheus scrape with
@@ -87,10 +110,18 @@ export function bbaMemoryRoutes() {
       "",
     ];
 
+    logger.info({
+      requestId: req.requestId,
+      companyId,
+      endpoint: "bba-memory.metrics",
+      durationMs: Date.now() - startMs,
+    }, "bba-memory metrics completed");
+
     res.type("text/plain; charset=utf-8").send(lines.join("\n"));
   });
 
   router.delete("/companies/:companyId/bba-memory/idempotency-keys", (req, res) => {
+    const startMs = Date.now();
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
 
@@ -104,7 +135,13 @@ export function bbaMemoryRoutes() {
     }
 
     const deleted = deleteIdempotentForCompany(companyId);
-    logger.info(`bba-memory: idempotency keys cleared for ${companyId}: ${deleted}`);
+    logger.info({
+      requestId: req.requestId,
+      companyId,
+      endpoint: "bba-memory.idempotency-keys.delete",
+      deleted,
+      durationMs: Date.now() - startMs,
+    }, "bba-memory idempotency-keys deleted");
     res.json({ deleted });
   });
 

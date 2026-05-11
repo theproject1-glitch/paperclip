@@ -44,6 +44,25 @@ export function healthRoutes(
 ) {
   const router = Router();
 
+  router.get("/deep", async (_req, res) => {
+    let dbConnected = false;
+    try {
+      if (db) {
+        await db.execute(sql`SELECT 1`);
+      }
+      dbConnected = true;
+    } catch (error) {
+      logger.warn({ err: error }, "Deep health check database probe failed");
+    }
+
+    res.status(dbConnected ? 200 : 503).json({
+      status: dbConnected ? "ok" : "unhealthy",
+      master_sha: process.env.PAPERCLIP_MASTER_SHA ?? process.env.GITHUB_SHA ?? "unknown",
+      uptime_ms: Math.round(process.uptime() * 1000),
+      db_connected: dbConnected,
+    });
+  });
+
   router.get("/", async (req, res) => {
     const actorType = "actor" in req ? req.actor?.type : null;
     const exposeFullDetails = shouldExposeFullHealthDetails(
