@@ -113,18 +113,13 @@ function buildAlertKey(companyId: string, triggers: StopLossTrigger[], dayKey: s
   return `betting_stop_loss:${companyId}:${dayKey}:${triggers.sort().join(",")}`;
 }
 
-function maybeSendTelegramAlert(result: StopLossPreflightResult, companyId: string, source: string | null) {
+function maybeLogStopLossAlert(result: StopLossPreflightResult, companyId: string, source: string | null) {
   if (result.allowed || result.currentBalance == null || result.triggers.length === 0) return;
 
   const alertKey = buildAlertKey(companyId, result.triggers, formatDayKey(new Date(result.evaluatedAt), result.timeZone));
   const lastSentAt = alertCooldowns.get(alertKey) ?? 0;
   if (Date.now() - lastSentAt < ALERT_COOLDOWN_MS) return;
   alertCooldowns.set(alertKey, Date.now());
-
-  const bot = (globalThis as Record<string, unknown>).__telegramBot as
-    | { send: (text: string) => Promise<void> }
-    | undefined;
-  if (!bot) return;
 
   const triggerLabel =
     result.triggers.length === 2
@@ -146,9 +141,7 @@ function maybeSendTelegramAlert(result: StopLossPreflightResult, companyId: stri
     `Time zone: ${result.timeZone}\n` +
     (source ? `Source: ${source}\n` : "");
 
-  void bot.send(message).catch((err) => {
-    logger.warn({ err, companyId }, "betting stop-loss: telegram alert failed");
-  });
+  logger.warn({ companyId, source, triggers: result.triggers, message }, "betting stop-loss alert");
 }
 
 export function bettingStopLossService(db: Db) {
@@ -251,7 +244,7 @@ export function bettingStopLossService(db: Db) {
       };
 
       if (input.notifyOnTrigger !== false) {
-        maybeSendTelegramAlert(result, input.companyId, input.source ?? null);
+        maybeLogStopLossAlert(result, input.companyId, input.source ?? null);
       }
 
       return result;

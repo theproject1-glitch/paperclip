@@ -1,6 +1,6 @@
-import { and, desc, eq, gt, inArray, lt, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, agentRuntimeState, bettingBankrollSnapshots, heartbeatRuns, issues, issueComments } from "@paperclipai/db";
+import { agents, agentRuntimeState, bettingBankrollSnapshots, heartbeatRuns, issues } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 
 export interface WatchdogHealthItem {
@@ -14,13 +14,6 @@ export interface WatchdogHealthSnapshot {
   generatedAt: Date;
 }
 
-function formatDuration(ms: number): string {
-  if (ms < 1000) return "<1s";
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${s % 60}s`;
-}
-
 const WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 const CONSECUTIVE_FAILURE_THRESHOLD = 3;
 const STUCK_RUN_THRESHOLD_MS = 20 * 60 * 1000; // 20 min
@@ -29,30 +22,17 @@ const COST_SPIKE_LOOKBACK_DAYS = 7;
 // Alert cooldown: same alert key won't fire again within this window
 const ALERT_COOLDOWN_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-const notifiedTelegramRunIds = new Set<string>();
 let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 // Dedup map: alertKey → last fired timestamp
 const alertCooldowns = new Map<string, number>();
 
-function tgSendToChat(chatId: string, text: string, inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>): void {
-  const bot = (globalThis as Record<string, unknown>).__telegramBot as
-    | { sendToChat: (chatId: string, text: string, replyMarkup?: unknown) => Promise<void> }
-    | undefined;
-  if (!bot?.sendToChat) return;
-  const replyMarkup = inlineKeyboard ? { inline_keyboard: inlineKeyboard } : undefined;
-  void bot.sendToChat(chatId, text, replyMarkup).catch(() => undefined);
-}
-
-function tgSend(text: string, alertKey?: string, replyMarkup?: unknown): void {
+function emitWatchdogAlert(text: string, alertKey?: string, context?: Record<string, unknown>): void {
   if (alertKey) {
     const last = alertCooldowns.get(alertKey) ?? 0;
     if (Date.now() - last < ALERT_COOLDOWN_MS) return;
     alertCooldowns.set(alertKey, Date.now());
   }
-  const bot = (globalThis as Record<string, unknown>).__telegramBot as
-    | { send: (t: string, replyMarkup?: unknown) => Promise<void> }
-    | undefined;
-  if (bot) void bot.send(text, replyMarkup).catch(() => undefined);
+  logger.warn({ ...context, alertKey, text }, "watchdog alert");
 }
 
 function readCostUsd(json: Record<string, unknown> | null | undefined): number {
@@ -96,12 +76,12 @@ async function checkConsecutiveFailures(db: Db): Promise<void> {
       })
       .where(and(eq(agents.id, agent.id), inArray(agents.status, ["idle", "running", "error"])));
 
-    tgSend(
+    emitWatchdogAlert(
       `⚠️ <b>Watchdog: ${label}</b>\n` +
       `${CONSECUTIVE_FAILURE_THRESHOLD} consecutive failures — agent auto-paused.\n` +
       `Check runs tab and resume manually after fixing.`,
       `consecutive_failures:${agent.id}`,
-      { inline_keyboard: [[{ text: `▶ Resume ${label}`, callback_data: `resume:${agent.id}` }]] },
+      { agentId: agent.id, role: agent.role },
     );
   }
 }
@@ -136,10 +116,11 @@ async function checkStuckRuns(db: Db): Promise<void> {
       .where(eq(heartbeatRuns.id, run.id));
 
     // Group stuck-run alerts per agent (not per run) to avoid flooding
-    tgSend(
+    emitWatchdogAlert(
       `🔴 <b>Watchdog: stuck run cancelled</b>\n` +
       `Run <code>${run.id.slice(0, 8)}</code> was running for >20 min — force-failed.`,
       `stuck_run_agent:${run.agentId}`,
+      { runId: run.id, agentId: run.agentId },
     );
   }
 }
@@ -201,11 +182,12 @@ async function checkCostSpike(db: Db): Promise<void> {
         { agentId: agent.id, latestCost, avg: avg.toFixed(4) },
         "watchdog: cost spike detected",
       );
-      tgSend(
+      emitWatchdogAlert(
         `💸 <b>Watchdog: cost spike — ${label}</b>\n` +
         `Latest run: $${latestCost.toFixed(3)}  |  7-day avg: $${avg.toFixed(3)}\n` +
         `${COST_SPIKE_MULTIPLIER}x threshold exceeded.`,
         `cost_spike:${agent.id}`,
+        { agentId: agent.id, latestCost, avg },
       );
     }
   }
@@ -254,14 +236,13 @@ async function checkQwenHealth(db: Db): Promise<void> {
       const label = agent.name ?? agent.role ?? agent.id.slice(0, 8);
       const ageHours = Math.round(ageMs / 3600000);
       const alertKey = `qwen_stale:${agent.id}`;
-      const lastFired = alertCooldowns.get(alertKey) ?? 0;
-      if (Date.now() - lastFired < ALERT_COOLDOWN_MS) continue;
 
       logger.warn({ agentId: agent.id, role: agent.role, ageHours }, "watchdog: qwen artifact stale");
-      tgSend(
+      emitWatchdogAlert(
         `🤖 <b>Watchdog: qwen stale — ${label}</b>\n` +
         `Artifact is ${ageHours}h old. Ollama may be down or preprocessing failing.`,
         alertKey,
+        { agentId: agent.id, role: agent.role, ageHours },
       );
     }
   }
@@ -287,86 +268,14 @@ async function checkBankrollDrawdown(db: Db): Promise<void> {
     const current = balances[0]!;
     const drawdown = peak > 0 ? (peak - current) / peak : 0;
     if (drawdown >= 0.20) {
-      tgSend(
+      emitWatchdogAlert(
         `📉 <b>Watchdog: bankroll drawdown</b>\n` +
         `Peak: ${peak.toFixed(0)} RON → Current: ${current.toFixed(0)} RON\n` +
         `Drawdown: ${(drawdown * 100).toFixed(1)}% — review betting strategy.`,
         `bankroll_drawdown:${companyId}`,
+        { companyId, peak, current, drawdown },
       );
     }
-  }
-}
-
-async function checkTelegramTriggeredRuns(db: Db): Promise<void> {
-  const cutoff = new Date(Date.now() - 10 * 60 * 1000);
-  const completedRuns = await db
-    .select({
-      id: heartbeatRuns.id,
-      agentId: heartbeatRuns.agentId,
-      status: heartbeatRuns.status,
-      startedAt: heartbeatRuns.startedAt,
-      finishedAt: heartbeatRuns.finishedAt,
-      contextSnapshot: heartbeatRuns.contextSnapshot,
-      stderrExcerpt: heartbeatRuns.stderrExcerpt,
-    })
-    .from(heartbeatRuns)
-    .where(
-      and(
-        inArray(heartbeatRuns.status, ["succeeded", "failed"]),
-        gte(heartbeatRuns.updatedAt, cutoff),
-        sql`${heartbeatRuns.contextSnapshot}->>'telegramChatId' IS NOT NULL`,
-      ),
-    );
-
-  for (const run of completedRuns) {
-    if (notifiedTelegramRunIds.has(run.id)) continue;
-    notifiedTelegramRunIds.add(run.id);
-
-    const ctx = run.contextSnapshot as Record<string, unknown> | null;
-    const telegramChatId = ctx?.telegramChatId as string | undefined;
-    const issueId = ctx?.issueId as string | undefined;
-    if (!telegramChatId) continue;
-
-    const agentRow = await db
-      .select({ name: agents.name, role: agents.role })
-      .from(agents)
-      .where(eq(agents.id, run.agentId))
-      .then((rows) => rows[0] ?? null);
-
-    const agentLabel = agentRow?.name ?? agentRow?.role ?? run.agentId.slice(0, 8);
-    const durationMs =
-      run.startedAt && run.finishedAt
-        ? run.finishedAt.getTime() - run.startedAt.getTime()
-        : null;
-    const durationStr = durationMs != null ? formatDuration(durationMs) : "?";
-
-    let commentBody: string | null = null;
-    if (issueId) {
-      commentBody = await db
-        .select({ body: issueComments.body })
-        .from(issueComments)
-        .where(eq(issueComments.issueId, issueId))
-        .orderBy(desc(issueComments.createdAt))
-        .limit(1)
-        .then((rows) => rows[0]?.body ?? null);
-    }
-
-    const succeeded = run.status === "succeeded";
-    const icon = succeeded ? "✅" : "❌";
-    const verb = succeeded ? "a terminat" : "a eșuat";
-    let text = `${icon} <b>${agentLabel}</b> ${verb} · ${durationStr}\n━━━━━━━━━━━━━━━━━━━━━\n`;
-    if (commentBody) {
-      text += commentBody.length > 800 ? commentBody.slice(0, 797) + "..." : commentBody;
-    } else if (!succeeded && run.stderrExcerpt) {
-      text += run.stderrExcerpt.slice(0, 400);
-    } else {
-      text += succeeded ? "Run completat fără comentariu." : "Run eșuat. Verifică logs pentru detalii.";
-    }
-
-    const buttons: Array<{ text: string; callback_data: string }> = [];
-    if (!succeeded && issueId) buttons.push({ text: "🔄 Retry", callback_data: `retry_run:${issueId}` });
-
-    tgSendToChat(telegramChatId, text, buttons.length > 0 ? [buttons] : undefined);
   }
 }
 
@@ -524,16 +433,11 @@ async function runWatchdogChecks(db: Db): Promise<void> {
   } catch (err) {
     logger.warn({ err }, "watchdog: bankroll-drawdown check failed");
   }
-  try {
-    await checkTelegramTriggeredRuns(db);
-  } catch (err) {
-    logger.warn({ err }, "watchdog: telegram-triggered-runs check failed");
-  }
 }
 
 export function startWatchdog(db: Db): void {
   if (watchdogTimer) return;
-  // Run once immediately at startup (after a short delay so Telegram bot is ready)
+  // Run once shortly after startup so the rest of the app can finish booting.
   const startupDelay = setTimeout(() => {
     void runWatchdogChecks(db as unknown as Db);
   }, 15_000);

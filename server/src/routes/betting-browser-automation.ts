@@ -165,13 +165,6 @@ export function bettingBrowserAutomationRoutes(db: Db) {
       }
       throw unprocessable("Secret reference must include secretId or secretName.");
     },
-    sendAlert: async (text) => {
-      const bot = (globalThis as Record<string, unknown>).__telegramBot as
-        | { send: (message: string) => Promise<void> }
-        | undefined;
-      if (!bot) return;
-      await bot.send(text);
-    },
   }));
 
   router.post("/companies/:companyId/betting-browser-automation/execute", (req, res, next) => {
