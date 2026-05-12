@@ -81,3 +81,4 @@ export { bettingPlacedBets } from "./betting_placed_bets.js";
 export { bettingBankrollSnapshots } from "./betting_bankroll_snapshots.js";
 export { bettingPerformanceReports } from "./betting_performance_reports.js";
 export { bettingCalibrationSignals } from "./betting_calibration_signals.js";
+export { bettingSafetyLimits } from "./betting_safety_limits.js";
