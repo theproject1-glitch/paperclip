@@ -342,6 +342,13 @@ export function putIdempotencyKey(
     .run(key, companyId, responseJson, nowIso());
 }
 
+export function deleteIdempotencyKey(key: string, companyId: string): number {
+  const result = getDb()
+    .prepare(`DELETE FROM idempotency_keys WHERE key = ? AND company_id = ?`)
+    .run(key, companyId);
+  return Number(result.changes ?? 0);
+}
+
 export function deleteIdempotentForCompany(companyId: string): number {
   const result = getDb()
     .prepare(`DELETE FROM idempotency_keys WHERE company_id = ?`)

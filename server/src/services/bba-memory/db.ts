@@ -29,7 +29,7 @@ function resolveSchemaPath(): string {
   return path.join(here, "schema.sql");
 }
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 let dbInstance: DatabaseSync | null = null;
 
@@ -67,6 +67,10 @@ export function initBbaMemory(): DatabaseSync {
     migrateRunsAndFailuresAddCheck(db);
   }
 
+  if (currentVersion > 0 && currentVersion < 4) {
+    migrateIdempotencyKeysCompositeCompanyKey(db);
+  }
+
   if (currentVersion < CURRENT_SCHEMA_VERSION) {
     db.prepare(
       "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
@@ -81,6 +85,75 @@ export function initBbaMemory(): DatabaseSync {
 
   dbInstance = db;
   return db;
+}
+
+function migrateIdempotencyKeysCompositeCompanyKey(db: DatabaseSync): void {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'idempotency_keys'")
+    .all() as Array<{ name: string }>;
+  if (tables.length === 0) return;
+
+  const columns = db
+    .prepare("PRAGMA table_info(idempotency_keys)")
+    .all() as Array<{ name: string }>;
+  const hasCompanyId = columns.some((column) => column.name === "company_id");
+  const hasResponseJson = columns.some((column) => column.name === "response_json");
+  const hasCreatedAt = columns.some((column) => column.name === "created_at");
+
+  db.exec("BEGIN");
+  try {
+    db.exec(`
+      CREATE TABLE idempotency_keys_new (
+        key TEXT NOT NULL,
+        company_id TEXT NOT NULL,
+        response_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (key, company_id)
+      )
+    `);
+
+    if (hasResponseJson && hasCreatedAt) {
+      if (hasCompanyId) {
+        db.exec(`
+          INSERT OR REPLACE INTO idempotency_keys_new (
+            key, company_id, response_json, created_at
+          )
+          SELECT
+            key,
+            COALESCE(NULLIF(company_id, ''), '__legacy__') AS company_id,
+            response_json,
+            created_at
+          FROM idempotency_keys
+          WHERE key IS NOT NULL
+        `);
+      } else {
+        db.exec(`
+          INSERT OR REPLACE INTO idempotency_keys_new (
+            key, company_id, response_json, created_at
+          )
+          SELECT key, '__legacy__', response_json, created_at
+          FROM idempotency_keys
+          WHERE key IS NOT NULL
+        `);
+      }
+    }
+
+    db.exec("DROP TABLE idempotency_keys");
+    db.exec("ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys");
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_idempotency_company
+      ON idempotency_keys(company_id, created_at)
+    `);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_idempotency_created_at
+      ON idempotency_keys(created_at)
+    `);
+    db.exec("COMMIT");
+    logger.info("bba-memory: migrated idempotency_keys to composite company key");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 /**
