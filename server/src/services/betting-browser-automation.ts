@@ -1768,7 +1768,8 @@ async function waitForOddsReady(
     "[class*='loading-offer']",
     "[class*='match-loading']",
   ];
-  const deadline = Date.now() + Math.min(timeoutMs, 25_000);
+  const waitCapMs = Math.min(timeoutMs, 45_000);
+  const deadline = Date.now() + waitCapMs;
   let reloaded = false;
 
   while (Date.now() < deadline) {
@@ -1778,7 +1779,7 @@ async function waitForOddsReady(
       if (count > 0) return; // odds ready
     }
     // After half the timeout with no odds, try a reload once
-    if (!reloaded && Date.now() > deadline - Math.min(timeoutMs, 25_000) / 2) {
+    if (!reloaded && Date.now() > deadline - waitCapMs / 2) {
       await appendLog(paths, "odds not yet visible — reloading page once to re-trigger SPA fetch");
       await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs }).catch(() => {});
       await sleep(3000);
