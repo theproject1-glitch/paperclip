@@ -9,6 +9,9 @@ export const bettingPlacedBets = pgTable(
     companyId: uuid("company_id").notNull().references(() => companies.id),
     predictionId: uuid("prediction_id").references(() => bettingPredictions.id),
     bookmaker: text("bookmaker").notNull(),
+    sport: text("sport"),
+    league: text("league"),
+    betType: text("bet_type"),
     odds: doublePrecision("odds").notNull(),
     stake: doublePrecision("stake").notNull(),
     currency: text("currency").notNull().default("RON"),
@@ -24,6 +27,8 @@ export const bettingPlacedBets = pgTable(
   },
   (table) => ({
     companyPlacedAtIdx: index("betting_placed_bets_company_placed_at_idx").on(table.companyId, table.placedAt),
+    companySportPlacedAtIdx: index("betting_placed_bets_company_sport_placed_at_idx").on(table.companyId, table.sport, table.placedAt),
+    companyLeaguePlacedAtIdx: index("betting_placed_bets_company_league_placed_at_idx").on(table.companyId, table.league, table.placedAt),
     idempotencyKeyUniq: unique("betting_placed_bets_idempotency_key_uniq").on(table.idempotencyKey),
   }),
 );

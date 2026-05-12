@@ -111,6 +111,9 @@ export interface BettingAutomationBetInput {
   marketHint?: string | null;
   odds: number;
   stake: number;
+  sport?: string | null;
+  league?: string | null;
+  betType?: string | null;
   currency?: string | null;
   eventUrl?: string | null;
   searchQuery?: string | null;
@@ -2042,6 +2045,9 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
       companyId: request.companyId,
       predictionId: request.bet.predictionId ?? null,
       bookmaker: request.bookmakerConfig.bookmaker,
+      sport: request.bet.sport?.trim() || null,
+      league: request.bet.league?.trim() || null,
+      betType: request.bet.betType?.trim() || null,
       odds: request.bet.odds,
       stake: request.bet.stake,
       currency: request.bet.currency?.trim() || "RON",

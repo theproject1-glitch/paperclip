@@ -12,6 +12,7 @@ import {
   putIdempotencyKey,
 } from "../services/bba-memory/index.js";
 import { secretService } from "../services/secrets.js";
+import { evaluateBettingSafetyGuards } from "../services/betting-safety.js";
 import { assertCompanyAccess } from "./authz.js";
 import { unprocessable } from "../errors.js";
 import { bbaRateLimiter } from "../middleware/bba-rate-limit.js";
@@ -211,6 +212,9 @@ export function bettingBrowserAutomationRoutes(db: Db) {
           marketHint: typeof b.marketHint === "string" ? b.marketHint : null,
           odds: requireNumber(b.odds, `${label}.odds`),
           stake: requireNumber(b.stake, `${label}.stake`),
+          sport: typeof b.sport === "string" ? b.sport : null,
+          league: typeof b.league === "string" ? b.league : null,
+          betType: typeof b.betType === "string" ? b.betType : typeof b.bet_type === "string" ? b.bet_type : null,
           currency: typeof b.currency === "string" ? b.currency : null,
           eventUrl: typeof b.eventUrl === "string" ? b.eventUrl : null,
           searchQuery: typeof b.searchQuery === "string" ? b.searchQuery : null,
@@ -218,6 +222,20 @@ export function bettingBrowserAutomationRoutes(db: Db) {
       }
 
       const execution = normalizeExecutionForPreAuth(parseExecution(body.execution));
+      const parsedBet = parseBetObject(bet as Record<string, unknown>, "bet");
+      const parsedBets = rawBets
+        ? rawBets.map((b: unknown, i: number) => parseBetObject(requireObject(b, `bets[${i}]`), `bets[${i}]`))
+        : null;
+      const currentBalance = typeof body.currentBalance === "number" ? body.currentBalance : null;
+      const safety = await evaluateBettingSafetyGuards(db, companyId, parsedBet, currentBalance);
+      if (!safety.allowed) {
+        return res.status(safety.httpStatus).json({
+          error: safety.error,
+          message: safety.message,
+          details: safety.details,
+        });
+      }
+
       idempotencyKey = readIdempotencyKey(req);
 
       let shouldStoreIdempotencyResult = false;
@@ -247,7 +265,7 @@ export function bettingBrowserAutomationRoutes(db: Db) {
       const result = await svc.execute({
         companyId,
         issueId: typeof body.issueId === "string" ? body.issueId : null,
-        currentBalance: typeof body.currentBalance === "number" ? body.currentBalance : null,
+        currentBalance,
         sessionStartedAt: typeof body.sessionStartedAt === "string" ? body.sessionStartedAt : null,
         loginUsername: {
           secretId: typeof loginUsername.secretId === "string" ? loginUsername.secretId : null,
@@ -283,9 +301,9 @@ export function bettingBrowserAutomationRoutes(db: Db) {
           historyReady: bookmakerConfig.historyReady ? requireObject(bookmakerConfig.historyReady, "bookmakerConfig.historyReady") as any : undefined,
           historySelection: bookmakerConfig.historySelection ? requireObject(bookmakerConfig.historySelection, "bookmakerConfig.historySelection") as any : undefined,
         },
-        bet: parseBetObject(bet as Record<string, unknown>, "bet"),
+        bet: parsedBet,
         ...(rawBets ? {
-          bets: rawBets.map((b: unknown, i: number) => parseBetObject(requireObject(b, `bets[${i}]`), `bets[${i}]`)),
+          bets: parsedBets ?? undefined,
         } : {}),
         riskControls: {
           maxStakePerBet: requireNumber(riskControls.maxStakePerBet, "riskControls.maxStakePerBet"),
