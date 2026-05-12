@@ -51,8 +51,25 @@ import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_ROLLOUT_NOISE_RE =
   /^\d{4}-\d{2}-\d{2}T[^\s]+\s+ERROR\s+codex_core::rollout::list:\s+state db missing rollout path for thread\s+[a-z0-9-]+$/i;
+const CODEX_PLUGIN_SYNC_NOISE_RE =
+  /codex_core::plugins::(?:manager|startup_sync):\s+(?:failed to warm featured plugin ids cache|startup remote plugin sync failed|git sync failed for curated plugin sync)\b/i;
+const CODEX_SHELL_SNAPSHOT_NOISE_RE =
+  /codex_core::shell_snapshot:\s+Failed to create shell snapshot for powershell:/i;
+const CODEX_PLUGIN_MANIFEST_NOISE_RE =
+  /codex_core::plugins::manifest:\s+ignoring interface\.defaultPrompt in plugin/i;
 
-function stripCodexRolloutNoise(text: string): string {
+function stripCodexRuntimeNoise(text: string): string {
+  // Codex can emit multiline plugin-sync warnings (occasionally with HTTP error
+  // pages) before producing useful JSONL. They are non-fatal for local CLI runs,
+  // but leaving them in stderr makes Paperclip report them as CTO failures.
+  if (
+    CODEX_PLUGIN_SYNC_NOISE_RE.test(text) ||
+    CODEX_SHELL_SNAPSHOT_NOISE_RE.test(text) ||
+    CODEX_PLUGIN_MANIFEST_NOISE_RE.test(text)
+  ) {
+    return "";
+  }
+
   const parts = text.split(/\r?\n/);
   const kept: string[] = [];
   for (const part of parts) {
@@ -704,12 +721,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           await onLog(stream, chunk);
           return;
         }
-        const cleaned = stripCodexRolloutNoise(chunk);
+        const cleaned = stripCodexRuntimeNoise(chunk);
         if (!cleaned.trim()) return;
         await onLog(stream, cleaned);
       },
     });
-    const cleanedStderr = stripCodexRolloutNoise(proc.stderr);
+    const cleanedStderr = stripCodexRuntimeNoise(proc.stderr);
     return {
       proc: {
         ...proc,

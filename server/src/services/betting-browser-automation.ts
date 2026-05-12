@@ -996,8 +996,6 @@ async function dismissCasaOverlays(page: Page, paths?: SessionPaths): Promise<vo
       "[class*='popup'] button, [class*='modal'] button, [class*='Popup'] button, [class*='Modal'] button, [role='dialog'] button"
     )).filter((el) => {
       const e = el as HTMLElement;
-      const container = e.closest(".user-box-form, [role='dialog'], .modal, form");
-      if (container?.querySelector("input[type='password']")) return false;
       const r = e.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return false;
       const txt = e.innerText?.trim().toLowerCase() ?? "";
