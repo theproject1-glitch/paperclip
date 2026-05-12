@@ -929,7 +929,29 @@ function isMainModule(metaUrl: string): boolean {
   }
 }
 
+let processDiagnosticsRegistered = false;
+
+function registerProcessDiagnostics() {
+  if (processDiagnosticsRegistered) return;
+  processDiagnosticsRegistered = true;
+
+  process.on("unhandledRejection", (reason) => {
+    logger.error({ err: reason }, "Paperclip server observed an unhandled promise rejection");
+  });
+  process.on("uncaughtException", (err) => {
+    logger.error({ err }, "Paperclip server observed an uncaught exception");
+    process.exit(1);
+  });
+  process.on("beforeExit", (code) => {
+    logger.warn({ code }, "Paperclip server process beforeExit");
+  });
+  process.on("exit", (code) => {
+    logger.warn({ code }, "Paperclip server process exit");
+  });
+}
+
 if (isMainModule(import.meta.url)) {
+  registerProcessDiagnostics();
   void startServer().catch((err) => {
     logger.error({ err }, "Paperclip server failed to start");
     process.exit(1);

@@ -1,0 +1,226 @@
+[
+  {
+    "id": "eba24811-f005-4090-a7c8-9c4fccfe5cd7",
+    "status": "running",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T02:17:12.248Z",
+    "finishedAt": null,
+    "livenessReason": null,
+    "resultJson": null
+  },
+  {
+    "id": "51f471a3-a291-4500-b8e0-59b9ea857b00",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T02:15:54.702Z",
+    "finishedAt": "2026-05-12T02:17:11.937Z",
+    "livenessReason": "Run produced useful output but no concrete action evidence",
+    "resultJson": {
+      "summary": "Am preluat și am închis heartbeat-ul cu acțiune executivă:\n\n- Am reconfirmat din API că `BET-223` are încă status `blocked` și rămâne blocat de `BET-217` (`status=blockedBy: BET-217`).\n- Am verificat `BET-217` direct prin `/api/issues/BET-217` și `/api/issues/BET-217/heartbeat-context`.\n  - `BET-217` este tot `in_progress` pe metadata, dar ultimul context de execuție din heartbeat arată run `53515f53-6057-4afb-a706-170aee840d11` cu eșec `claude_auth_required` / `error_max_turns` la `2026-05-12T0"
+    }
+  },
+  {
+    "id": "a1422438-557c-48af-8136-137aa05c9545",
+    "status": "failed",
+    "error": "Process lost -- child pid 51960 is no longer running; retrying once",
+    "errorCode": "process_lost",
+    "startedAt": "2026-05-12T02:10:35.711Z",
+    "finishedAt": "2026-05-12T02:15:54.3Z",
+    "livenessReason": "Run ended with failed (process_lost)",
+    "resultJson": null
+  },
+  {
+    "id": "81636bad-4d28-47a5-853b-01f720eedf8d",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T01:11:37.857Z",
+    "finishedAt": "2026-05-12T01:12:04.445Z",
+    "livenessReason": "Issue is done",
+    "resultJson": {
+      "summary": "Am închis `BET-248` ca `done` și am lăsat comment de verdict:\n\n- Verdict: pattern-ul de churn este așteptat după `successful_run_missing_state` + loops de recuperare.\n- S-a confirmat că [source issue](/BET/issues/BET-122) are blocaj rezolvat (`BET-247` gata), rămâne în `in_progress` ca container recurent de auto-evoluție.\n- Nu există blocker tehnic nou; următorul pas continuă pe orizontul planificat.\n- Decizie practică: nicio acțiune CTO suplimentară; monitorizare continuă prin `BET-122` și `BET"
+    }
+  },
+  {
+    "id": "5107aca8-4f8c-4c3d-a6e4-6dcea5eccd6e",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T01:07:57.712Z",
+    "finishedAt": "2026-05-12T01:09:09Z",
+    "livenessReason": "Run produced concrete action evidence: 1 activity event(s)",
+    "resultJson": {
+      "summary": "Am continuat din starea curentă exact pe lane-ul de coordonare Paperclip.\n\n- `BET-223` rămâne singurul item din inbox CTO, cu `status: blocked` și `dependencyReady: false`.\n- Am verificat blocker-ul `BET-217`: este încă `in_progress` (fără update operațional nou după 12:53 UTC din 2026-05-10) și a rămas de fapt o sarcină de execuție la BBA.\n- Am adăugat un comentariu de checkpoint pe `BET-223` cu concluzia de așteptare explicită pe handoff-ul de la BBA, fără acțiuni CTO viabile până când `BET-21"
+    }
+  },
+  {
+    "id": "ddc18462-3cf5-4cc4-ac08-cbceeba84959",
+    "status": "failed",
+    "error": "Process lost -- child pid 49104 is no longer running; retrying once",
+    "errorCode": "process_lost",
+    "startedAt": "2026-05-12T01:05:40.48Z",
+    "finishedAt": "2026-05-12T01:07:56.768Z",
+    "livenessReason": "Run ended with failed (process_lost)",
+    "resultJson": null
+  },
+  {
+    "id": "7b87690b-13fb-4719-8d22-2c976af1ceba",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T01:04:29.227Z",
+    "finishedAt": "2026-05-12T01:05:40.201Z",
+    "livenessReason": "Issue is done",
+    "resultJson": {
+      "summary": "Done.\n\n- `BET-247` was closed with a valid disposition and explicit next-step recovery note.\n  - Updated issue: [`BET-247`](/BET/issues/BET-247) is now `done`.\n  - Comment added describing the valid continuation state and linking to recurrence.\n- Recovery linkage was removed from `BET-122` to clear the blocker chain:\n  - Updated `BET-122` with `blockedByIssueIds = []`.\n  - Added comment on `BET-122` confirming `in_progress` standby recurrence and live continuation.\n- Verified final state:\n  - `B"
+    }
+  },
+  {
+    "id": "120f3bc3-f3d6-41c1-af7d-ae86ab0b9367",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T01:01:51.024Z",
+    "finishedAt": "2026-05-12T01:04:28.582Z",
+    "livenessReason": "Run produced concrete action evidence: 1 issue comment(s), 3 activity event(s)",
+    "resultJson": {
+      "summary": "Updated `BET-124` to a valid standby state. I left a comment with evidence that the Week 4 CTO self-evolution cycle already executed on May 12, 2026, linked the existing artifact at [bet124_weekly_architecture_cycle_2026-05-12.md](C:/Users/thepr/.paperclip/instances/default/workspaces/d9bd4d75-fb9f-4221-85fb-ff59b74b5f44/reports/bet124_weekly_architecture_cycle_2026-05-12.md), and changed the issue from live work to `backlog` so it is parked between real weekly triggers instead of resurfacing as"
+    }
+  },
+  {
+    "id": "77ddead9-dfad-4d15-9349-cd605d8b3be5",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T00:42:57.327Z",
+    "finishedAt": "2026-05-12T00:43:57.518Z",
+    "livenessReason": "Run produced concrete action evidence: 1 issue comment(s), 2 activity event(s)",
+    "resultJson": {
+      "summary": "Updated `BET-124` in Paperclip.\n\nThe Week 4 directive was acknowledged on the issue, with dated evidence that the CTO self-evolution cycle already executed on `2026-05-12` in run `80dd5e63-5d05-46f7-b955-6bf78cba5b3b`. I also pointed to the report artifact at [bet124_weekly_architecture_cycle_2026-05-12.md](C:/Users/thepr/.paperclip/instances/default/workspaces/d9bd4d75-fb9f-4221-85fb-ff59b74b5f44/reports/bet124_weekly_architecture_cycle_2026-05-12.md).\n\nI moved the issue from `in_progress` back"
+    }
+  },
+  {
+    "id": "250a396a-7d2a-4163-833a-f2fce9c93e3b",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T00:36:55.751Z",
+    "finishedAt": "2026-05-12T00:38:35.726Z",
+    "livenessReason": "Issue is done",
+    "resultJson": {
+      "summary": "Finalizat pentru `BET-242` cu dispoziție validă de execuție.\n\nCe am făcut:\n- Am recuperat contextul BET-122 și confirmat că problema este pur de flux (dispoziție lipsă), nu defect tehnic nou.\n- Am aplicat PATCH pe `BET-122` (`1c06476e-a993-4f39-926a-fb5e883a7ea1`):\n  - `status`: `in_progress`\n  - `blockedByIssueIds`: `[]`\n  - comentariu de recuperare: container recurent, în standby, cu continuare explicită la `[BET-241](/BET/issues/BET-241)`.\n- Am marcat `BET-242` (`1abba2ad-6bd4-450b-89d8-2d7bf"
+    }
+  },
+  {
+    "id": "5286fa83-ea0e-44a6-96f6-a19561076833",
+    "status": "failed",
+    "error": "Error running remote compact task: {\n  \"error\": {\n    \"message\": \"Your input exceeds the context window of this model. Please adjust your input and try again.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"input\",\n    \"code\": \"context_length_exceeded\"\n  }\n}",
+    "errorCode": "adapter_failed",
+    "startedAt": "2026-05-12T00:33:51.308Z",
+    "finishedAt": "2026-05-12T00:33:56.904Z",
+    "livenessReason": "Run ended with failed (adapter_failed)",
+    "resultJson": null
+  },
+  {
+    "id": "fb20e5d1-dcc9-4b6c-a820-4c6672b28a60",
+    "status": "failed",
+    "error": "Error running remote compact task: {\n  \"error\": {\n    \"message\": \"Your input exceeds the context window of this model. Please adjust your input and try again.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"input\",\n    \"code\": \"context_length_exceeded\"\n  }\n}",
+    "errorCode": "adapter_failed",
+    "startedAt": "2026-05-12T00:32:32.547Z",
+    "finishedAt": "2026-05-12T00:33:50.87Z",
+    "livenessReason": "Run ended with failed (adapter_failed)",
+    "resultJson": {
+      "summary": "Am identificat o posibilă sursă utilă: logurile din `C:\\Users\\thepr\\.paperclip\\instances\\default\\logs` conțin traseele de apel pentru `BET-122`, deci pot extrage exact ce pas a lipsit. În continuare citesc un segment restrâns din acele loguri (evente + status) ca să găsesc secvența „next step missing”."
+    }
+  },
+  {
+    "id": "78c72eff-a2cf-4d40-aac1-ebc8da482839",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T00:33:57.123Z",
+    "finishedAt": "2026-05-12T00:34:57.197Z",
+    "livenessReason": "Run produced concrete action evidence: 6 activity event(s)",
+    "resultJson": {
+      "summary": "Recovered `BET-122` and closed `BET-240`.\n\nI restored `BET-122` to `in_progress`, cleared the synthetic blocker, and recorded the valid continuation path: `BET-239` is the next scheduled weekly cycle due on May 18, 2026. That matches the board rule that recurring weekly-cycle parents stay in standby between real triggers instead of being left `blocked`.\n\nThen I marked `BET-240` `done` with the recovery note. No code changes were needed for this heartbeat."
+    }
+  },
+  {
+    "id": "408b3296-a764-4f29-a298-35787b0fccc3",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T00:31:45.828Z",
+    "finishedAt": "2026-05-12T00:32:32.357Z",
+    "livenessReason": "Run produced concrete action evidence: 1 issue comment(s), 2 activity event(s)",
+    "resultJson": {
+      "summary": "I acknowledged the CEO unblock comment and converted BET-127 from artificial live work into a parked recurring item.\n\nThe May cycle was already completed on May 2, 2026, with the report at [bet127_monthly_technical_requirements_2026-05-02.md](C:/Users/thepr/.paperclip/instances/default/workspaces/d9bd4d75-fb9f-4221-85fb-ff59b74b5f44/reports/bet127_monthly_technical_requirements_2026-05-02.md). Since this wake arrived on May 12, 2026, there is no new monthly evidence window yet, so I updated the "
+    }
+  },
+  {
+    "id": "80dd5e63-5d05-46f7-b955-6bf78cba5b3b",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T00:27:47.964Z",
+    "finishedAt": "2026-05-12T00:31:45.546Z",
+    "livenessReason": "Run output declared a concrete blocker",
+    "resultJson": {
+      "summary": "Completed the weekly BET-124 cycle and wrote the new report at [bet124_weekly_architecture_cycle_2026-05-12.md](C:/Users/thepr/.paperclip/instances/default/workspaces/d9bd4d75-fb9f-4221-85fb-ff59b74b5f44/reports/bet124_weekly_architecture_cycle_2026-05-12.md).\n\nThe main shift this week is that wrong-selection risk did not recur, but live execution is now primarily blocked by split-session authentication and profile/runtime instability. I posted the summary back to the issue and parked `BET-124` "
+    }
+  },
+  {
+    "id": "adeacb38-099c-49a4-b7ba-1035617c51fe",
+    "status": "succeeded",
+    "error": null,
+    "errorCode": null,
+    "startedAt": "2026-05-12T00:18:42.514Z",
+    "finishedAt": "2026-05-12T00:20:41.548Z",
+    "livenessReason": "Run output declared a concrete blocker",
+    "resultJson": {
+      "summary": "Closed [BET-238](/BET/issues/BET-238) as `done` after verifying the source stall was caused by a missing `BraveSearch` secret binding on the CEO agent, and that `adapterConfig.env.BraveSearch` is present again now. I left a recovery comment on the issue with the exact failure and the verification result.\n\nVerification: [BET-237](/BET/issues/BET-237) still shows `blocked` in the immediate API snapshot, but its blocker is now `done` and `unresolvedBlockerCount` is `0`, so the intended next path is"
+    }
+  },
+  {
+    "id": "c6c1aae8-fa35-47eb-b9f0-7099a1266564",
+    "status": "failed",
+    "error": "Secret is not bound to agent:d9bd4d75-fb9f-4221-85fb-ff59b74b5f44 at env.OpenAI",
+    "errorCode": "adapter_failed",
+    "startedAt": "2026-05-12T00:16:36.867Z",
+    "finishedAt": "2026-05-12T00:16:36.909Z",
+    "livenessReason": "Run ended with failed (adapter_failed)",
+    "resultJson": null
+  },
+  {
+    "id": "5c0da753-d896-43de-b325-650af6a4228f",
+    "status": "failed",
+    "error": "Secret is not bound to agent:d9bd4d75-fb9f-4221-85fb-ff59b74b5f44 at env.OpenAI",
+    "errorCode": "adapter_failed",
+    "startedAt": "2026-05-12T00:08:54.999Z",
+    "finishedAt": "2026-05-12T00:08:55.027Z",
+    "livenessReason": "Run ended with failed (adapter_failed)",
+    "resultJson": null
+  },
+  {
+    "id": "12da32c2-52f4-466d-b050-a820aa46d4d5",
+    "status": "failed",
+    "error": "Secret is not bound to agent:d9bd4d75-fb9f-4221-85fb-ff59b74b5f44 at env.OpenAI",
+    "errorCode": "adapter_failed",
+    "startedAt": "2026-05-12T00:00:25.524Z",
+    "finishedAt": "2026-05-12T00:00:25.579Z",
+    "livenessReason": "Run ended with failed (adapter_failed)",
+    "resultJson": null
+  },
+  {
+    "id": "a54dc336-91c3-42cc-8c03-fd4d0c12abf5",
+    "status": "failed",
+    "error": "Secret is not bound to agent:d9bd4d75-fb9f-4221-85fb-ff59b74b5f44 at env.OpenAI",
+    "errorCode": "adapter_failed",
+    "startedAt": "2026-05-12T00:00:25.35Z",
+    "finishedAt": "2026-05-12T00:00:25.421Z",
+    "livenessReason": "Run ended with failed (adapter_failed)",
+    "resultJson": null
+  }
+]
