@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
+import { promisify } from "node:util";
+import type { Browser, BrowserContext, BrowserType, Locator, Page } from "@playwright/test";
 import type { Db } from "@paperclipai/db";
 import { bettingPlacedBets, bettingPredictions } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
@@ -16,6 +18,7 @@ const COOKIE_CACHE_PATH = path.join(
   ".paperclip",
   "bba-cookie-cache.json",
 );
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_ACTION_DELAY_MIN_MS = 3_000;
 const DEFAULT_ACTION_DELAY_MAX_MS = 15_000;
@@ -45,11 +48,19 @@ const CHROMIUM_STEALTH_ARGS = [
   "--disable-infobars",
   "--no-first-run",
   "--no-default-browser-check",
+  "--disable-dev-shm-usage",
+  "--disable-gpu",
   "--disable-features=TranslateUI",
   // Suppress "Chrome didn't shut down correctly" crash recovery dialog
   "--disable-session-crashed-bubble",
   "--restore-last-session=0",
 ];
+const CHROME_PROFILE_VERSION_KEYS = new Set([
+  "last_used_chrome_version",
+  "last_version",
+  "created_by_version",
+  "version",
+]);
 
 const COMMON_VIEWPORTS = [
   { width: 1920, height: 1080 },
@@ -446,6 +457,113 @@ function isSkippableProfileCopyError(error: unknown) {
   );
 }
 
+function parseMajorVersion(value: string | null | undefined) {
+  if (!value) return null;
+  const match = value.match(/\b(\d+)(?:\.\d+){0,3}\b/);
+  if (!match) return null;
+  const parsed = Number.parseInt(match[1]!, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function findChromeVersionInPrefs(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  for (const [key, entry] of Object.entries(value)) {
+    if (CHROME_PROFILE_VERSION_KEYS.has(key) && typeof entry === "string" && parseMajorVersion(entry) !== null) {
+      return entry;
+    }
+    const nested = findChromeVersionInPrefs(entry);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+async function readChromeProfileVersion(userDataDir: string) {
+  const candidates = [
+    path.join(userDataDir, "Default", "Preferences"),
+    path.join(userDataDir, "Local State"),
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.readFile(candidate, "utf8");
+      const parsed = JSON.parse(raw);
+      const version = findChromeVersionInPrefs(parsed);
+      if (version) return version;
+    } catch {
+      // Profile metadata is best-effort only.
+    }
+  }
+
+  return null;
+}
+
+async function readPlaywrightBrowserVersionFromRegistry(executablePath: string) {
+  const revision = executablePath.match(/chromium-(\d+)/i)?.[1];
+  if (!revision) return null;
+
+  const roots = [
+    process.cwd(),
+    path.resolve(process.cwd(), ".."),
+    path.resolve(process.cwd(), "..", ".."),
+  ];
+  const candidates: string[] = [];
+  for (const root of roots) {
+    candidates.push(path.join(root, "node_modules", "playwright-core", "browsers.json"));
+    const pnpmRoot = path.join(root, "node_modules", ".pnpm");
+    try {
+      const entries = await fs.readdir(pnpmRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name.startsWith("playwright-core@")) {
+          candidates.push(path.join(pnpmRoot, entry.name, "node_modules", "playwright-core", "browsers.json"));
+        }
+      }
+    } catch {
+      // pnpm layout may not exist in packaged builds.
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const raw = await fs.readFile(candidate, "utf8");
+      const parsed = JSON.parse(raw) as {
+        browsers?: Array<{ name?: string; revision?: string; browserVersion?: string }>;
+      };
+      const browser = parsed.browsers?.find((entry) => entry.name === "chromium" && entry.revision === revision);
+      if (browser?.browserVersion) return browser.browserVersion;
+    } catch {
+      // Keep searching.
+    }
+  }
+
+  return null;
+}
+
+async function detectBrowserExecutableVersion(browserType: BrowserType) {
+  let executablePath: string | null = null;
+  try {
+    executablePath = browserType.executablePath();
+    const { stdout, stderr } = await execFileAsync(executablePath, ["--version"], {
+      timeout: 5_000,
+      windowsHide: true,
+    });
+    const version = `${stdout ?? ""}${stderr ? ` ${stderr}` : ""}`.trim();
+    if (version) return version;
+  } catch {
+    // Windows Chrome for Testing may exit non-zero for --version; fall back to Playwright registry.
+  }
+  return executablePath ? readPlaywrightBrowserVersionFromRegistry(executablePath) : null;
+}
+
+async function createFreshUserDataDir(random: () => number) {
+  const root = path.join(
+    os.tmpdir(),
+    "paperclip-bba-profile-fresh",
+    `${Date.now()}-${random().toString(36).slice(2, 8)}`,
+  );
+  await fs.mkdir(root, { recursive: true });
+  return root;
+}
+
 async function copyDirBestEffort(sourceDir: string, targetDir: string) {
   const entries = await fs.readdir(sourceDir, { withFileTypes: true });
   await fs.mkdir(targetDir, { recursive: true });
@@ -508,6 +626,39 @@ async function cloneUserDataDir(userDataDir: string, random: () => number) {
   } catch { /* ignore if Preferences not found */ }
 
   return cloneRoot;
+}
+
+async function prepareChromiumUserDataDirForLaunch(
+  userDataDir: string,
+  browserType: BrowserType,
+  random: () => number,
+  paths: SessionPaths,
+) {
+  const [profileVersion, browserVersion] = await Promise.all([
+    readChromeProfileVersion(userDataDir),
+    detectBrowserExecutableVersion(browserType),
+  ]);
+  const profileMajor = parseMajorVersion(profileVersion);
+  const browserMajor = parseMajorVersion(browserVersion);
+
+  await appendLog(
+    paths,
+    `profile compatibility probe: profile=${profileVersion ?? "unknown"} browser=${browserVersion ?? "unknown"}`,
+  );
+
+  if (profileMajor !== null && browserMajor !== null && Math.abs(profileMajor - browserMajor) > 1) {
+    const freshDir = await createFreshUserDataDir(random);
+    const message =
+      `profile/browser major mismatch detected (profile=${profileMajor}, browser=${browserMajor}); ` +
+      `using fresh temporary profile ${freshDir} to avoid Chromium profile crash`;
+    await appendLog(paths, message);
+    logger.warn({ userDataDir, freshDir, profileVersion, browserVersion }, "bba: Chrome profile version mismatch");
+    return freshDir;
+  }
+
+  const clonedUserDataDir = await cloneUserDataDir(userDataDir, random);
+  await appendLog(paths, `persistent profile cloned from ${userDataDir} to ${clonedUserDataDir}`);
+  return clonedUserDataDir;
 }
 
 async function appendLog(paths: SessionPaths, message: string) {
@@ -706,12 +857,38 @@ const CASA_OVERLAY_DISMISS_SELECTORS = [
   "button:has-text('Am peste 18 ani')",
 ];
 
-async function dismissCasaOverlays(page: Page): Promise<void> {
+async function locatorIsInsideLoginForm(locator: Locator) {
+  return locator.evaluate((el) => {
+    const element = el as HTMLElement;
+    const container = element.closest(".user-box-form, [role='dialog'], .modal, form");
+    return Boolean(container?.querySelector("input[type='password']"));
+  }).catch(() => false);
+}
+
+async function pageHasVisiblePasswordInput(page: Page) {
+  for (const frame of [page.mainFrame(), ...page.frames().filter((frame) => frame !== page.mainFrame())]) {
+    const passwordInputs = frame.locator("input[type='password']");
+    const count = await passwordInputs.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      if (await passwordInputs.nth(index).isVisible().catch(() => false)) return true;
+    }
+  }
+  return false;
+}
+
+async function dismissCasaOverlays(page: Page, paths?: SessionPaths): Promise<void> {
   for (const sel of CASA_OVERLAY_DISMISS_SELECTORS) {
     try {
       const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 800 })) {
+        if (await locatorIsInsideLoginForm(btn)) {
+          const message = `bba: dismissCasaOverlays skipped login-modal control: ${sel}`;
+          logger.info(message);
+          if (paths) await appendLog(paths, message);
+          continue;
+        }
         logger.info(`bba: dismissCasaOverlays clicking: ${sel}`);
+        if (paths) await appendLog(paths, `overlay dismiss click: ${sel}`);
         await btn.click({ timeout: 2_000 });
         // "JOACĂ ÎN CONTINUARE" triggers site-side re-auth — give it time
         if (sel.includes("JOACĂ")) await page.waitForTimeout(2_500);
@@ -725,6 +902,8 @@ async function dismissCasaOverlays(page: Page): Promise<void> {
       "[class*='popup'] button, [class*='modal'] button, [class*='Popup'] button, [class*='Modal'] button, [role='dialog'] button"
     )).filter((el) => {
       const e = el as HTMLElement;
+      const container = e.closest(".user-box-form, [role='dialog'], .modal, form");
+      if (container?.querySelector("input[type='password']")) return false;
       const r = e.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return false;
       const txt = e.innerText?.trim().toLowerCase() ?? "";
@@ -745,10 +924,19 @@ async function dismissCasaOverlays(page: Page): Promise<void> {
   }).catch(() => false);
   if (jsClickedClose) {
     logger.info("bba: dismissCasaOverlays JS-fallback clicked close button in popup");
+    if (paths) await appendLog(paths, "overlay dismiss JS fallback clicked close button");
     await page.waitForTimeout(500);
   }
-  // Escape key as final fallback to dismiss any remaining modal/dialog
+  if (await pageHasVisiblePasswordInput(page)) {
+    const message = "bba: dismissCasaOverlays skipped Escape because login password field is visible";
+    logger.info(message);
+    if (paths) await appendLog(paths, message);
+    return;
+  }
+
+  // Escape key as final fallback to dismiss any remaining modal/dialog, but never while login is visible.
   await page.keyboard.press("Escape").catch(() => undefined);
+  if (paths) await appendLog(paths, "overlay dismiss Escape fallback pressed");
   await page.waitForTimeout(300);
 }
 
@@ -756,6 +944,7 @@ async function ensureLoginFormVisible(
   page: Page,
   request: BettingAutomationRequest,
   runtime: RuntimeConfig,
+  paths: SessionPaths,
   cursorPos: { x: number; y: number },
   deps: {
     sleep: (ms: number) => Promise<void>;
@@ -764,7 +953,7 @@ async function ensureLoginFormVisible(
   },
 ) {
   const isCasa = request.bookmakerConfig.bookmaker.trim().toLowerCase().includes("casa pariurilor");
-  if (isCasa) await dismissCasaOverlays(page);
+  if (isCasa) await dismissCasaOverlays(page, paths);
 
   const authSelectors = [
     ...request.bookmakerConfig.username.selectors,
@@ -784,6 +973,7 @@ async function ensureLoginFormVisible(
     return;
   }
   logger.info("bba: ensureLoginFormVisible — loginEntry found, clicking");
+  await appendLog(paths, "login entry found; clicking");
 
   await clickHuman(page, loginEntry, cursorPos, {
     sleep: deps.sleep,
@@ -792,10 +982,29 @@ async function ensureLoginFormVisible(
     lastClickAt: deps.lastClickAt,
   });
 
-  // Cookie banner may appear on top of the login modal after clicking CONECTARE — dismiss it
   if (isCasa) {
     await deps.sleep(800);
-    await dismissCasaOverlays(page);
+    const passwordAfterFirstClick = await waitForVisibleOne(
+      page,
+      [...request.bookmakerConfig.password.selectors, "input[type='password']"],
+      request.bet,
+      { timeoutMs: 5_000, sleep: deps.sleep },
+    );
+    if (passwordAfterFirstClick) {
+      await appendLog(paths, "Casa login password field visible after CONECTARE click");
+    } else {
+      await appendLog(paths, "Casa login password field not visible after first CONECTARE click; retrying direct click once");
+      await loginEntry.click().catch(() => undefined);
+      await waitForVisibleOne(
+        page,
+        [...request.bookmakerConfig.password.selectors, "input[type='password']"],
+        request.bet,
+        { timeoutMs: 5_000, sleep: deps.sleep },
+      );
+    }
+
+    // Cookie/banner cleanup after the login form is open. This helper now avoids login modal controls.
+    await dismissCasaOverlays(page, paths);
   }
 
   let visiblePrompt = await waitForVisibleOne(page, authSelectors, request.bet, {
@@ -809,7 +1018,7 @@ async function ensureLoginFormVisible(
   await loginEntry.click().catch(() => undefined);
   if (isCasa) {
     await deps.sleep(800);
-    await dismissCasaOverlays(page);
+    await dismissCasaOverlays(page, paths);
   }
   visiblePrompt = await waitForVisibleOne(page, authSelectors, request.bet, {
     timeoutMs: Math.min(runtime.pageTimeoutMs, 5_000),
@@ -1404,7 +1613,8 @@ async function performLogin(
   const username = await resolveSecret(request.companyId, request.loginUsername);
   const password = await resolveSecret(request.companyId, request.loginPassword);
 
-  await ensureLoginFormVisible(page, request, runtime, cursorPos, deps);
+  await ensureLoginFormVisible(page, request, runtime, paths, cursorPos, deps);
+  screenshots.push(await screenshot(page, paths, "login-form-visible"));
 
   const isCasaLogin = request.bookmakerConfig.bookmaker.trim().toLowerCase().includes("casa pariurilor");
   const CASA_USERNAME_FALLBACKS = ["input[type='text']", "input[placeholder*='utilizator' i]", "input[name*='user' i]"];
@@ -1485,7 +1695,8 @@ async function performBrowserAutofillLogin(
   deps: { sleep: (ms: number) => Promise<void>; random: () => number; lastClickAt: { value: number } },
 ): Promise<boolean> {
   try {
-    await ensureLoginFormVisible(page, request, runtime, cursorPos, deps);
+    await ensureLoginFormVisible(page, request, runtime, paths, cursorPos, deps);
+    screenshots.push(await screenshot(page, paths, "autofill-login-form-visible"));
   } catch {
     await appendLog(paths, "autofill login: could not open login form");
     return false;
@@ -1945,11 +2156,15 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
           ...(isChromium ? { args: CHROMIUM_STEALTH_ARGS } : {}),
         };
         if (userDataDir) {
-          clonedUserDataDir = await cloneUserDataDir(userDataDir, random);
-          await appendLog(
-            paths,
-            `persistent profile cloned from ${userDataDir} to ${clonedUserDataDir}`,
-          );
+          clonedUserDataDir = isChromium
+            ? await prepareChromiumUserDataDirForLaunch(userDataDir, browserType, random, paths)
+            : await cloneUserDataDir(userDataDir, random);
+          if (!isChromium) {
+            await appendLog(
+              paths,
+              `persistent profile cloned from ${userDataDir} to ${clonedUserDataDir}`,
+            );
+          }
           context = await browserType.launchPersistentContext(clonedUserDataDir, contextOptions);
         } else {
           browser = await browserType.launch({
