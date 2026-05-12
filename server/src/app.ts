@@ -43,6 +43,7 @@ import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
 import { bbaMemoryRoutes } from "./routes/bba-memory.js";
 import { bettingBrowserAutomationRoutes } from "./routes/betting-browser-automation.js";
+import { predictionRoutes } from "./routes/predictions.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
@@ -299,6 +300,7 @@ export async function createApp(
   );
   api.use(adapterRoutes());
   api.use(bbaMemoryRoutes());
+  api.use(predictionRoutes(db));
   // BBA execute endpoint. Authorization: assertCompanyAccess (per-company gating).
   // The operator confirmation UX (must-confirm-before-bet) lives in the UI layer
   // — see docs/bba-memory-ui-integration-spec.md.
