@@ -79,3 +79,4 @@ export { bettingMatches } from "./betting_matches.js";
 export { bettingPredictions } from "./betting_predictions.js";
 export { bettingPlacedBets } from "./betting_placed_bets.js";
 export { bettingBankrollSnapshots } from "./betting_bankroll_snapshots.js";
+export { bettingPerformanceReports } from "./betting_performance_reports.js";
