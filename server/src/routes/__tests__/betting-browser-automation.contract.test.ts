@@ -126,7 +126,27 @@ describe.sequential("betting browser automation contract routes", () => {
     const statuses = [first.status, second.status].sort();
     expect(statuses).toEqual([200, 409]);
     const inProgress = first.status === 409 ? first : second;
-    expect(inProgress.body).toEqual({ error: "request_in_progress", retryAfterMs: 5000 });
+    expect(inProgress.body).toEqual({ error: "request_in_progress", retryAfterMs: 30000 });
+    expect(handle.stubExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("Two concurrent calls with different Idempotency-Keys are locked per company", async () => {
+    handle.stubExecute.mockImplementationOnce(
+      () => new Promise((resolve) => setTimeout(() => resolve({
+        status: "completed",
+        placedBetId: "test-123",
+      }), 30)),
+    );
+
+    const [first, second] = await Promise.all([
+      postExecute().set("Idempotency-Key", "company-lock-a"),
+      postExecute().set("Idempotency-Key", "company-lock-b"),
+    ]);
+
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([200, 409]);
+    const locked = first.status === 409 ? first : second;
+    expect(locked.body).toEqual({ error: "execution_in_progress", retryAfterMs: 30000 });
     expect(handle.stubExecute).toHaveBeenCalledTimes(1);
   });
 

@@ -7,16 +7,22 @@ import { promisify } from "node:util";
 import type { Browser, BrowserContext, BrowserType, Locator, Page } from "@playwright/test";
 import type { Db } from "@paperclipai/db";
 import { bettingPlacedBets, bettingPredictions } from "@paperclipai/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 import { unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { bettingStopLossService, type StopLossPreflightResult } from "./betting-stop-loss.js";
 
-const COOKIE_CACHE_PATH = path.join(
+const LEGACY_COOKIE_CACHE_PATH = path.join(
   process.env.USERPROFILE ?? os.homedir(),
   ".paperclip",
   "bba-cookie-cache.json",
+);
+const COOKIE_CACHE_DIR = path.join(
+  process.env.USERPROFILE ?? os.homedir(),
+  ".paperclip",
+  "bba-memory",
+  "cookies",
 );
 const execFileAsync = promisify(execFile);
 
@@ -61,6 +67,41 @@ const CHROME_PROFILE_VERSION_KEYS = new Set([
   "created_by_version",
   "version",
 ]);
+
+function safePathSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function getCookieCachePath(companyId: string): string {
+  return path.join(COOKIE_CACHE_DIR, `${safePathSegment(companyId)}.json`);
+}
+
+async function migrateLegacyCookieCache(companyId: string, paths?: SessionPaths): Promise<void> {
+  const companyCookieCachePath = getCookieCachePath(companyId);
+  try {
+    await fs.access(companyCookieCachePath);
+    return;
+  } catch {
+    // Company-scoped cache does not exist yet.
+  }
+
+  try {
+    await fs.access(LEGACY_COOKIE_CACHE_PATH);
+  } catch {
+    return;
+  }
+
+  await fs.mkdir(path.dirname(companyCookieCachePath), { recursive: true });
+  try {
+    await fs.rename(LEGACY_COOKIE_CACHE_PATH, companyCookieCachePath);
+  } catch {
+    await fs.copyFile(LEGACY_COOKIE_CACHE_PATH, companyCookieCachePath);
+    await fs.unlink(LEGACY_COOKIE_CACHE_PATH).catch(() => undefined);
+  }
+  const message = `migrated legacy BBA cookie cache to company-scoped cache: ${companyCookieCachePath}`;
+  logger.info({ companyId, cookieCachePath: companyCookieCachePath }, "bba: migrated cookie cache");
+  if (paths) await appendLog(paths, message);
+}
 
 const COMMON_VIEWPORTS = [
   { width: 1920, height: 1080 },
@@ -1673,11 +1714,13 @@ async function performLogin(
   }
 }
 
-async function persistSessionCookies(context: BrowserContext, paths: SessionPaths) {
+async function persistSessionCookies(context: BrowserContext, paths: SessionPaths, companyId: string) {
   try {
     const sessionState = await context.storageState();
-    await fs.writeFile(COOKIE_CACHE_PATH, JSON.stringify(sessionState, null, 2), "utf8");
-    await appendLog(paths, "session cookies persisted to cache");
+    const cookieCachePath = getCookieCachePath(companyId);
+    await fs.mkdir(path.dirname(cookieCachePath), { recursive: true });
+    await fs.writeFile(cookieCachePath, JSON.stringify(sessionState, null, 2), "utf8");
+    await appendLog(paths, `session cookies persisted to company cache: ${cookieCachePath}`);
   } catch (persistErr) {
     await appendLog(paths, `warning: failed to persist cookie cache: ${persistErr}`);
   }
@@ -1988,6 +2031,7 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
   function generateIdempotencyKey(request: BettingAutomationRequest): string {
     const day = new Date().toISOString().slice(0, 10);
     const parts = [
+      request.companyId,
       request.bookmakerConfig.bookmaker.toLowerCase().trim(),
       request.bet.matchLabel.toLowerCase().trim(),
       request.bet.market.toLowerCase().trim(),
@@ -2074,7 +2118,10 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
       // Idempotency: check if this exact bet was already placed today
       const idempotencyKey = generateIdempotencyKey(request);
       const existingBet = await db.select().from(bettingPlacedBets)
-        .where(eq(bettingPlacedBets.idempotencyKey, idempotencyKey))
+        .where(and(
+          eq(bettingPlacedBets.companyId, request.companyId),
+          eq(bettingPlacedBets.idempotencyKey, idempotencyKey),
+        ))
         .limit(1);
       if (existingBet.length > 0 && existingBet[0]!.executionStatus !== "pending") {
         const eb = existingBet[0]!;
@@ -2219,10 +2266,12 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
         if (skipLogin) {
           // Inject any cookies persisted from a prior automatic re-login
           try {
-            const cached = JSON.parse(await fs.readFile(COOKIE_CACHE_PATH, "utf8"));
+            await migrateLegacyCookieCache(request.companyId, paths);
+            const cookieCachePath = getCookieCachePath(request.companyId);
+            const cached = JSON.parse(await fs.readFile(cookieCachePath, "utf8"));
             if (Array.isArray(cached?.cookies) && cached.cookies.length > 0) {
               await context.addCookies(cached.cookies);
-              await appendLog(paths, `loaded ${cached.cookies.length} cached session cookies`);
+              await appendLog(paths, `loaded ${cached.cookies.length} cached session cookies from company cache`);
             }
           } catch {
             // no cookie cache yet — first run or file missing
@@ -2323,7 +2372,7 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
               throw new Error("Login completed but the authenticated sportsbook/account session could not be verified.");
             }
             screenshots.push(await screenshot(page, paths, "session-authenticated"));
-            await persistSessionCookies(context, paths);
+            await persistSessionCookies(context, paths, request.companyId);
           }
 
           await appendLog(paths, `opening post-auth entry URL ${resolveEntryUrl(request)}`);
@@ -2356,7 +2405,7 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
             throw new Error("Login completed but the authenticated session could not be verified.");
           }
           screenshots.push(await screenshot(page, paths, "session-authenticated"));
-          await persistSessionCookies(context, paths);
+          await persistSessionCookies(context, paths, request.companyId);
         }
 
         const betsToPlace = request.bets && request.bets.length > 0 ? request.bets : [request.bet];
@@ -2380,6 +2429,17 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
               await sleepFor(sleep, runtime, random);
               await clickHuman(page, marketGroup, cursorPos, navDeps);
             }
+          }
+
+          const alreadyInSlip = await verifySlipContainsSelection(page, currentBet, 1_500, sleep);
+          if (alreadyInSlip) {
+            matchedSelections.push(currentBet.selection);
+            await appendLog(
+              paths,
+              `slip already contains leg ${i + 1}; skipped selection click to avoid toggling it off`,
+            );
+            screenshots.push(await screenshot(page, paths, `selection-${i + 1}-already-in-slip`));
+            continue;
           }
 
           const selectionButton = await resolveSelectionButton(

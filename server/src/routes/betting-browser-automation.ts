@@ -8,6 +8,7 @@ import {
 import { instrumentBettingService } from "../services/bba-memory-instrumentation.js";
 import {
   claimIdempotencyKey,
+  deleteIdempotencyKey,
   getIdempotencyKey,
   putIdempotencyKey,
 } from "../services/bba-memory/index.js";
@@ -16,6 +17,9 @@ import { assertCompanyAccess } from "./authz.js";
 import { unprocessable } from "../errors.js";
 import { bbaRateLimiter } from "../middleware/bba-rate-limit.js";
 import { logger } from "../middleware/logger.js";
+
+const executeLocksByCompany = new Set<string>();
+const EXECUTE_LOCK_RETRY_AFTER_MS = 30_000;
 
 function requireObject(value: unknown, label: string) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -237,14 +241,27 @@ export function bettingBrowserAutomationRoutes(db: Db) {
         if (claim === "exists_pending") {
           return res.status(409).json({
             error: "request_in_progress",
-            retryAfterMs: 5000,
+            retryAfterMs: EXECUTE_LOCK_RETRY_AFTER_MS,
           });
         }
 
         shouldStoreIdempotencyResult = claim === "claimed";
       }
 
-      const result = await svc.execute({
+      if (executeLocksByCompany.has(companyId)) {
+        if (idempotencyKey && shouldStoreIdempotencyResult) {
+          deleteIdempotencyKey(idempotencyKey, companyId);
+        }
+        return res.status(409).json({
+          error: "execution_in_progress",
+          retryAfterMs: EXECUTE_LOCK_RETRY_AFTER_MS,
+        });
+      }
+
+      executeLocksByCompany.add(companyId);
+      let result: Awaited<ReturnType<typeof svc.execute>>;
+      try {
+        result = await svc.execute({
         companyId,
         issueId: typeof body.issueId === "string" ? body.issueId : null,
         currentBalance: typeof body.currentBalance === "number" ? body.currentBalance : null,
@@ -301,6 +318,9 @@ export function bettingBrowserAutomationRoutes(db: Db) {
         },
         execution,
       });
+      } finally {
+        executeLocksByCompany.delete(companyId);
+      }
 
       if (idempotencyKey && shouldStoreIdempotencyResult) {
         putIdempotencyKey(idempotencyKey, companyId, JSON.stringify(result));

@@ -25,6 +25,7 @@ export {
   listRunsForSession,
   getCompanyStatsSummary,
   claimIdempotencyKey,
+  deleteIdempotencyKey,
   getIdempotencyKey,
   putIdempotencyKey,
   deleteIdempotentForCompany,

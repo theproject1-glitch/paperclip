@@ -87,6 +87,23 @@ describe.sequential("bba-memory repository", () => {
     });
   });
 
+  it("idempotency keys are isolated by company even when the key string matches", () => {
+    bbaMemory.putIdempotencyKey("shared-key", "company-1", '{"company":"one"}');
+    bbaMemory.putIdempotencyKey("shared-key", "company-2", '{"company":"two"}');
+
+    expect(bbaMemory.getIdempotencyKey("shared-key", "company-1")?.response_json).toBe('{"company":"one"}');
+    expect(bbaMemory.getIdempotencyKey("shared-key", "company-2")?.response_json).toBe('{"company":"two"}');
+  });
+
+  it("deleteIdempotencyKey removes only one company/key pair", () => {
+    bbaMemory.putIdempotencyKey("shared-key", "company-1", "{}");
+    bbaMemory.putIdempotencyKey("shared-key", "company-2", "{}");
+
+    expect(bbaMemory.deleteIdempotencyKey("shared-key", "company-1")).toBe(1);
+    expect(bbaMemory.getIdempotencyKey("shared-key", "company-1")).toBeUndefined();
+    expect(bbaMemory.getIdempotencyKey("shared-key", "company-2")).toBeDefined();
+  });
+
   it("getIdempotencyKey after 60s deletes the row and returns undefined", () => {
     const now = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
