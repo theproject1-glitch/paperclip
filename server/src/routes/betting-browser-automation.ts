@@ -118,6 +118,8 @@ function parseExecution(execution: unknown) {
     userDataDir: optionalString(value.userDataDir, "execution.userDataDir"),
     headless: optionalBoolean(value.headless, "execution.headless"),
     skipLogin: optionalBoolean(value.skipLogin, "execution.skipLogin"),
+    attachToUserChrome: optionalBoolean(value.attachToUserChrome, "execution.attachToUserChrome"),
+    chromeDebugPort: optionalNumber(value.chromeDebugPort, "execution.chromeDebugPort"),
     startUrl: optionalString(value.startUrl, "execution.startUrl"),
     sessionTimeoutMs: optionalNumber(value.sessionTimeoutMs, "execution.sessionTimeoutMs"),
     pageTimeoutMs: optionalNumber(value.pageTimeoutMs, "execution.pageTimeoutMs"),
@@ -138,7 +140,7 @@ function parseExecution(execution: unknown) {
 export function normalizeExecutionForPreAuth(
   execution: BettingAutomationExecutionOptions | null,
 ): BettingAutomationExecutionOptions | null {
-  if (execution?.skipLogin !== true) {
+  if (execution?.skipLogin !== true || execution.attachToUserChrome === true) {
     return execution;
   }
 
