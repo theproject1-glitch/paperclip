@@ -152,6 +152,15 @@ export function bettingStopLossService(db: Db) {
       const timeZone = input.timeZone?.trim() || DEFAULT_TIME_ZONE;
       const dailyLimitPct = input.dailyLimitPct ?? DEFAULT_DAILY_LIMIT_PCT;
       const sessionLimitPct = input.sessionLimitPct ?? DEFAULT_SESSION_LIMIT_PCT;
+      logger.info({
+        companyId: input.companyId,
+        dailyLimitPct,
+        sessionLimitPct,
+        usingDefaults: {
+          daily: input.dailyLimitPct == null,
+          session: input.sessionLimitPct == null,
+        },
+      }, "stop-loss preflight");
 
       const snapshots = await db
         .select({
@@ -196,7 +205,8 @@ export function bettingStopLossService(db: Db) {
             lossPct: null,
             limitPct: sessionLimitPct,
           },
-          reason: "Missing bankroll baseline; refusing bet placement until bankroll snapshots exist.",
+          reason:
+            "Missing bankroll baseline. Add a snapshot via POST /api/companies/{companyId}/bankroll before placing bets.",
         };
       }
 
