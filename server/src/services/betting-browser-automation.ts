@@ -24,6 +24,7 @@ const DEFAULT_RETRY_DELAY_MIN_MS = 20_000;
 const DEFAULT_RETRY_DELAY_MAX_MS = 30_000;
 const DEFAULT_PAGE_TIMEOUT_MS = 30_000;
 const DEFAULT_SESSION_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_USER_CHROME_CDP_PORT = 9222;
 const PROFILE_LOCK_FILE_NAMES = new Set([
   "SingletonCookie",
   "SingletonLock",
@@ -156,6 +157,8 @@ export interface BettingAutomationExecutionOptions {
   userDataDir?: string | null;
   headless?: boolean;
   skipLogin?: boolean;
+  attachToUserChrome?: boolean;
+  chromeDebugPort?: number;
   startUrl?: string | null;
   sessionTimeoutMs?: number;
   pageTimeoutMs?: number;
@@ -397,6 +400,28 @@ function resolveSkipLoginVerificationUrl(request: BettingAutomationRequest) {
   );
 }
 
+function isCasaPariurilorBookmaker(config: BettingAutomationBookmakerConfig) {
+  return config.bookmaker.trim().toLowerCase().includes("casa pariurilor");
+}
+
+export function shouldUseCdpPersistentProfile(request: BettingAutomationRequest) {
+  return shouldAttachToUserChrome(request);
+}
+
+function shouldAttachToUserChrome(request: BettingAutomationRequest) {
+  if (request.execution?.attachToUserChrome === true) return true;
+  if (request.execution?.attachToUserChrome === false) return false;
+  return isCasaPariurilorBookmaker(request.bookmakerConfig);
+}
+
+function resolveChromeDebugPort(input?: BettingAutomationExecutionOptions | null) {
+  const port = input?.chromeDebugPort ?? DEFAULT_USER_CHROME_CDP_PORT;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw unprocessable("execution.chromeDebugPort must be an integer TCP port.");
+  }
+  return port;
+}
+
 function normalizeRuntimeConfig(input?: BettingAutomationExecutionOptions | null): RuntimeConfig {
   const actionDelayMinMs = Math.max(0, input?.actionDelayMinMs ?? DEFAULT_ACTION_DELAY_MIN_MS);
   const actionDelayMaxMs = Math.max(actionDelayMinMs, input?.actionDelayMaxMs ?? DEFAULT_ACTION_DELAY_MAX_MS);
@@ -413,6 +438,75 @@ function normalizeRuntimeConfig(input?: BettingAutomationExecutionOptions | null
     minClickIntervalMs: Math.max(0, input?.minClickIntervalMs ?? DEFAULT_MIN_CLICK_INTERVAL_MS),
     headless: input?.headless ?? false,
   };
+}
+
+async function readUserChromeDebugVersion(port: number) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!response.ok) {
+      throw new Error(`Chrome debug endpoint returned HTTP ${response.status}.`);
+    }
+    return await response.json() as { Browser?: string; "User-Agent"?: string };
+  } catch (error) {
+    const detail = error instanceof Error ? ` (${error.message})` : "";
+    throw new Error(
+      `Chrome CDP endpoint is not available on localhost:${port}${detail}. ` +
+      "Please start Chrome with remote debugging enabled by running scripts/start-chrome-debug.ps1 before triggering BBA.",
+    );
+  }
+}
+
+async function attachToUserChrome(
+  playwright: PlaywrightModule,
+  port: number,
+  runtime: RuntimeConfig,
+  startUrl: string,
+) {
+  await readUserChromeDebugVersion(port);
+  const browser = await playwright.chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+  const context = browser.contexts()[0];
+  if (!context) {
+    throw new Error("No active browser context to attach to in user Chrome.");
+  }
+
+  const casaPage = context.pages().find((candidate) =>
+    candidate.url().toLowerCase().includes("casapariurilor"),
+  );
+  const page = casaPage ?? await context.newPage();
+  page.setDefaultTimeout(runtime.pageTimeoutMs);
+
+  if (!casaPage) {
+    await page.goto(startUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: runtime.pageTimeoutMs,
+    });
+  }
+
+  return {
+    browser,
+    context,
+    page,
+    mode: "attach" as const,
+  };
+}
+
+async function applyBrowserStealthMitigations(context: BrowserContext, page?: Page | null) {
+  const patch = () => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    // @ts-ignore - browser runtime patch for sites checking Chrome-shaped globals.
+    window.chrome = window.chrome ?? { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+    Object.defineProperty(navigator, "languages", { get: () => ["ro-RO", "ro", "en-US", "en"] });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    // @ts-ignore - remove common automation sentinels if present.
+    delete window.__playwright;
+    // @ts-ignore - remove common automation sentinels if present.
+    delete window.__pw_manual;
+  };
+
+  await context.addInitScript(patch);
+  await page?.evaluate(patch).catch(() => undefined);
 }
 
 function pickDelay(minMs: number, maxMs: number, random: () => number) {
@@ -711,6 +805,16 @@ async function dismissCasaOverlays(page: Page): Promise<void> {
     try {
       const btn = page.locator(sel).first();
       if (await btn.isVisible({ timeout: 800 })) {
+        const wouldCloseLoginModal = await btn.evaluate((el) => {
+          const container = (el as HTMLElement).closest(
+            ".user-box-form, [role='dialog'], .modal, [class*='modal'], [class*='Modal'], [class*='popup'], [class*='Popup']",
+          );
+          return Boolean(container?.querySelector("input[type='password']"));
+        }).catch(() => false);
+        if (wouldCloseLoginModal) {
+          logger.info(`bba: dismissCasaOverlays skipping login modal control: ${sel}`);
+          continue;
+        }
         logger.info(`bba: dismissCasaOverlays clicking: ${sel}`);
         await btn.click({ timeout: 2_000 });
         // "JOACĂ ÎN CONTINUARE" triggers site-side re-auth — give it time
@@ -730,6 +834,10 @@ async function dismissCasaOverlays(page: Page): Promise<void> {
       const txt = e.innerText?.trim().toLowerCase() ?? "";
       const cls = e.className?.toLowerCase() ?? "";
       const label = e.getAttribute("aria-label")?.toLowerCase() ?? "";
+      const container = e.closest(
+        ".user-box-form, [role='dialog'], .modal, [class*='modal'], [class*='Modal'], [class*='popup'], [class*='Popup']"
+      );
+      if (container?.querySelector("input[type='password']")) return false;
       // Only click buttons that look like close buttons, NOT login/action buttons
       return (
         txt === "×" || txt === "x" || txt === "✕" || txt === "✖" || txt === "close" ||
@@ -748,8 +856,44 @@ async function dismissCasaOverlays(page: Page): Promise<void> {
     await page.waitForTimeout(500);
   }
   // Escape key as final fallback to dismiss any remaining modal/dialog
-  await page.keyboard.press("Escape").catch(() => undefined);
-  await page.waitForTimeout(300);
+  const passwordInputVisible = await page.locator("input[type='password']").first()
+    .isVisible({ timeout: 300 })
+    .catch(() => false);
+  if (!passwordInputVisible) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await page.waitForTimeout(300);
+  }
+}
+
+async function handleCasaInactivityPrompt(page: Page, paths?: SessionPaths): Promise<boolean> {
+  const promptButton = page.locator(
+    "button:has-text('JOACĂ ÎN CONTINUARE'), button:has-text('JOACA IN CONTINUARE')",
+  ).first();
+  const promptText = page.locator(
+    "text=/Dore[șsş]ti\\s+s[ăa]\\s+joci\\s+[îi]n\\s+continuare\\?/i",
+  ).first();
+  const buttonVisible = await promptButton.isVisible({ timeout: 2_000 }).catch(() => false);
+  const textVisible = buttonVisible
+    ? true
+    : await promptText.isVisible({ timeout: 300 }).catch(() => false);
+
+  if (!buttonVisible && !textVisible) return false;
+
+  if (!buttonVisible) {
+    if (paths) {
+      await appendLog(paths, "Casa inactivity prompt text visible but continue button was not found")
+        .catch(() => undefined);
+    }
+    return false;
+  }
+
+  await promptButton.click({ timeout: 3_000 });
+  await page.waitForTimeout(2_500);
+  if (paths) {
+    await appendLog(paths, "handled Casa inactivity prompt: JOACĂ ÎN CONTINUARE clicked");
+  }
+  logger.info("bba: handled Casa inactivity prompt");
+  return true;
 }
 
 async function ensureLoginFormVisible(
@@ -1848,7 +1992,8 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
   return {
     execute: async (request: BettingAutomationRequest): Promise<BettingAutomationResult> => {
       validateStakeGuards(request);
-      const skipLogin = request.execution?.skipLogin === true;
+      const useUserChromeAttach = shouldAttachToUserChrome(request);
+      const skipLogin = request.execution?.skipLogin === true || useUserChromeAttach;
       const userDataDir = resolveUserDataDir(request.execution);
       const canCredentialLogin = canAttemptCredentialLogin(request);
       if (!skipLogin || canCredentialLogin) {
@@ -1924,7 +2069,7 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
         };
       }
 
-      const playwright = deps.playwright ?? await import("@playwright/test");
+      const playwright = (deps.playwright ?? await import("@playwright/test")) as PlaywrightModule;
       const browserName = resolveBrowserName(request.execution);
       const browserType = browserName === "firefox" ? playwright.firefox : playwright.chromium;
       const screenshots: string[] = [];
@@ -1932,6 +2077,7 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
       let context: BrowserContext | null = null;
       let browser: Browser | null = null;
       let clonedUserDataDir: string | null = null;
+      let attachedToUserChrome = false;
 
       try {
         const viewport = COMMON_VIEWPORTS[Math.floor(random() * COMMON_VIEWPORTS.length)]!;
@@ -1944,7 +2090,25 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
           recordVideo: { dir: paths.videoDir, size: { width: 1280, height: 720 } },
           ...(isChromium ? { args: CHROMIUM_STEALTH_ARGS } : {}),
         };
-        if (userDataDir) {
+        if (useUserChromeAttach) {
+          const chromeDebugPort = resolveChromeDebugPort(request.execution);
+          const chromeVersion = await readUserChromeDebugVersion(chromeDebugPort);
+          await appendLog(
+            paths,
+            `attaching to user Chrome over CDP port ${chromeDebugPort}: ${chromeVersion.Browser ?? "unknown Chrome"}`,
+          );
+          const attached = await attachToUserChrome(
+            playwright,
+            chromeDebugPort,
+            runtime,
+            resolveEntryUrl(request),
+          );
+          browser = attached.browser;
+          context = attached.context;
+          page = attached.page;
+          attachedToUserChrome = true;
+          await appendLog(paths, "attached to existing user Chrome session; browser will be left open");
+        } else if (userDataDir) {
           clonedUserDataDir = await cloneUserDataDir(userDataDir, random);
           await appendLog(
             paths,
@@ -1964,16 +2128,8 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
             recordVideo: { dir: paths.videoDir, size: { width: 1280, height: 720 } },
           });
         }
-        // Patch navigator to remove automation signals on every page
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-          // @ts-ignore
-          window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
-          Object.defineProperty(navigator, "languages", { get: () => ["ro-RO", "ro", "en-US", "en"] });
-          // Non-empty plugins list (headless has 0 by default)
-          Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-        });
-        page = context.pages()[0] ?? await context.newPage();
+        await applyBrowserStealthMitigations(context, page);
+        page = page ?? context.pages()[0] ?? await context.newPage();
         page.setDefaultTimeout(runtime.pageTimeoutMs);
 
         // Auto-dismiss Casa Pariurilor session/activity popups via addLocatorHandler.
@@ -1991,6 +2147,7 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
             await activePage.waitForTimeout(2_500);
             await appendLog(paths, "dismissed Casa session/activity popup — site re-auth may have triggered");
           });
+          await handleCasaInactivityPrompt(activePage, paths);
         }
 
         // Initial cursor position: somewhere plausible on screen
@@ -2151,9 +2308,15 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
         assertDeadline(startedAt, runtime.sessionTimeoutMs);
         await maybeClickOptional(page, request.bookmakerConfig.cookieAccept, betsToPlace[0]!);
         await maybeClickOptional(page, request.bookmakerConfig.popupClose, betsToPlace[0]!);
+        if (isCasaPariurilorBookmaker(request.bookmakerConfig)) {
+          await handleCasaInactivityPrompt(page, paths);
+        }
 
         for (let i = 0; i < betsToPlace.length; i++) {
           const currentBet = betsToPlace[i]!;
+          if (isCasaPariurilorBookmaker(request.bookmakerConfig)) {
+            await handleCasaInactivityPrompt(page, paths);
+          }
           await navigateToEventPage(page, { ...request, bet: currentBet }, runtime, paths, screenshots, cursorPos, navDeps);
           screenshots.push(await screenshot(page, paths, `event-page-${i + 1}`));
           assertDeadline(startedAt, runtime.sessionTimeoutMs);
@@ -2461,12 +2624,16 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
           failureReason: message,
         };
       } finally {
-        await context?.close().catch((err: unknown) => {
-          logger.warn({ err }, "betting browser automation: context close failed");
-        });
-        await browser?.close().catch((err: unknown) => {
-          logger.warn({ err }, "betting browser automation: browser close failed");
-        });
+        if (attachedToUserChrome) {
+          await appendLog(paths, "leaving attached user Chrome session open").catch(() => undefined);
+        } else {
+          await context?.close().catch((err: unknown) => {
+            logger.warn({ err }, "betting browser automation: context close failed");
+          });
+          await browser?.close().catch((err: unknown) => {
+            logger.warn({ err }, "betting browser automation: browser close failed");
+          });
+        }
         if (clonedUserDataDir) {
           await fs.rm(clonedUserDataDir, { recursive: true, force: true }).catch((err: unknown) => {
             logger.warn({ err, clonedUserDataDir }, "betting browser automation: cloned profile cleanup failed");
