@@ -322,6 +322,123 @@ describe("betting browser automation helpers", () => {
     expect(resolveBrowserName({ browserName: "firefox", skipLogin: true })).toBe("chromium");
   });
 
+  it("applies Casa clean-session Chromium headers on non-persistent contexts", async () => {
+    const closeContext = vi.fn(async () => undefined);
+    const closeBrowser = vi.fn(async () => undefined);
+    const page = {
+      setDefaultTimeout: vi.fn(),
+      goto: vi.fn(async () => undefined),
+      locator: vi.fn(() => ({
+        first() {
+          return this;
+        },
+        nth() {
+          return this;
+        },
+        count: vi.fn(async () => 0),
+        isVisible: vi.fn(async () => false),
+        isEditable: vi.fn(async () => false),
+        click: vi.fn(async () => undefined),
+        fill: vi.fn(async () => undefined),
+        type: vi.fn(async () => undefined),
+        innerText: vi.fn(async () => ""),
+        getAttribute: vi.fn(async () => null),
+        inputValue: vi.fn(async () => ""),
+        scrollIntoViewIfNeeded: vi.fn(async () => undefined),
+        boundingBox: vi.fn(async () => null),
+        locator: vi.fn(() => ({
+          first() {
+            return this;
+          },
+          nth() {
+            return this;
+          },
+          count: vi.fn(async () => 0),
+          isVisible: vi.fn(async () => false),
+          isEditable: vi.fn(async () => false),
+          innerText: vi.fn(async () => ""),
+          getAttribute: vi.fn(async () => null),
+        })),
+      })),
+      screenshot: vi.fn(async () => undefined),
+      waitForSelector: vi.fn(async () => undefined),
+      evaluate: vi.fn(async () => undefined),
+      title: vi.fn(async () => ""),
+      url: vi.fn(() => "about:blank"),
+      frames: vi.fn(() => [page]),
+      mainFrame: vi.fn(() => page),
+      addLocatorHandler: vi.fn(async () => undefined),
+      mouse: {
+        move: vi.fn(async () => undefined),
+        down: vi.fn(async () => undefined),
+        up: vi.fn(async () => undefined),
+      },
+      keyboard: {
+        press: vi.fn(async () => undefined),
+        type: vi.fn(async () => undefined),
+      },
+    };
+    const newPage = vi.fn(async () => page);
+    const addInitScript = vi.fn(async () => undefined);
+    const newContext = vi.fn(async () => ({
+      pages: () => [],
+      newPage,
+      close: closeContext,
+      addInitScript,
+    }));
+    const launch = vi.fn(async () => ({
+      newContext,
+      close: closeBrowser,
+    }));
+
+    const svc = bettingBrowserAutomationService(createFakeDb(), {
+      resolveSecret: vi.fn(async () => {
+        throw new Error("resolveSecret should not be called in skipLogin mode");
+      }),
+      playwright: {
+        chromium: { launch, launchPersistentContext: vi.fn() },
+        firefox: { launch: vi.fn(), launchPersistentContext: vi.fn() },
+      } as any,
+      sleep: async () => undefined,
+      random: () => 0.25,
+    });
+
+    const result = await svc.execute(buildRequest({
+      currentBalance: 1_000,
+      loginUsername: {},
+      loginPassword: {},
+      bookmakerConfig: {
+        ...buildRequest().bookmakerConfig,
+        bookmaker: "Casa Pariurilor",
+        baseUrl: "https://www.casapariurilor.ro/pariuri-online/fotbal",
+        loginUrl: "https://www.casapariurilor.ro/login",
+        username: { selectors: [] },
+        password: { selectors: [] },
+        loginSubmit: { selectors: [] },
+        loginSuccess: { selectors: ["[data-auth='ok']"] },
+      },
+      execution: {
+        skipLogin: true,
+        browserName: "chromium",
+        actionDelayMinMs: 0,
+        actionDelayMaxMs: 0,
+        minClickIntervalMs: 0,
+        retryDelayMinMs: 0,
+        retryDelayMaxMs: 0,
+        pageTimeoutMs: 100,
+        sessionTimeoutMs: 60_000,
+      },
+    }));
+
+    expect(result.status).toBe("failed");
+    expect(newContext).toHaveBeenCalledWith(expect.objectContaining({
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.91 Safari/537.36",
+      extraHTTPHeaders: { "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8" },
+    }));
+    expect(closeContext).toHaveBeenCalled();
+    expect(closeBrowser).toHaveBeenCalled();
+  });
+
   it("prefers explicit execution startUrl for pre-authenticated sessions", () => {
     const request = buildRequest({
       bookmakerConfig: {

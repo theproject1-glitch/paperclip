@@ -55,6 +55,11 @@ const CHROMIUM_STEALTH_ARGS = [
   "--disable-session-crashed-bubble",
   "--restore-last-session=0",
 ];
+const CASA_CLEAN_SESSION_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+  "AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/124.0.6367.91 Safari/537.36";
+const CASA_CLEAN_SESSION_ACCEPT_LANGUAGE = "ro-RO,ro;q=0.9,en-US;q=0.8";
 const CHROME_PROFILE_VERSION_KEYS = new Set([
   "last_used_chrome_version",
   "last_version",
@@ -2177,6 +2182,12 @@ export function bettingBrowserAutomationService(db: Db, deps: ServiceDeps) {
             locale: "ro-RO",
             timezoneId: "Europe/Bucharest",
             recordVideo: { dir: paths.videoDir, size: { width: 1280, height: 720 } },
+            ...(isChromium
+              ? {
+                userAgent: CASA_CLEAN_SESSION_USER_AGENT,
+                extraHTTPHeaders: { "Accept-Language": CASA_CLEAN_SESSION_ACCEPT_LANGUAGE },
+              }
+              : {}),
           });
         }
         // Patch navigator to remove automation signals on every page
