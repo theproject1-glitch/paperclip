@@ -865,23 +865,35 @@ const CASA_OVERLAY_DISMISS_SELECTORS = [
 async function locatorIsInsideLoginForm(locator: Locator) {
   return locator.evaluate((el) => {
     const element = el as HTMLElement;
-    const container = element.closest(".user-box-form, [role='dialog'], .modal, form");
+    // Use attribute-contains selector so "fortuna-dialog--modal" and similar BEM variants match
+    const container = element.closest(".user-box-form, [role='dialog'], .modal, [class*='modal'], [class*='login'], form");
     return Boolean(container?.querySelector("input[type='password']"));
   }).catch(() => false);
 }
 
 async function pageHasVisiblePasswordInput(page: Page) {
   for (const frame of [page.mainFrame(), ...page.frames().filter((frame) => frame !== page.mainFrame())]) {
-    const passwordInputs = frame.locator("input[type='password']");
-    const count = await passwordInputs.count().catch(() => 0);
-    for (let index = 0; index < count; index += 1) {
-      if (await passwordInputs.nth(index).isVisible().catch(() => false)) return true;
+    // Also check data-test-id for Casa Pariurilor which uses Vue components with type=null
+    for (const sel of ["input[type='password']", "[data-test-id='login-dialog-password-input'] input", "[data-test-id*='password'] input"]) {
+      const inputs = frame.locator(sel);
+      const count = await inputs.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        if (await inputs.nth(index).isVisible().catch(() => false)) return true;
+      }
     }
   }
   return false;
 }
 
 async function dismissCasaOverlays(page: Page, paths?: SessionPaths): Promise<void> {
+  // Usercentrics CMP renders its shadow DOM ~2-3s after DOMContentLoaded.
+  // Wait for the accept button to appear before attempting dismissal.
+  try {
+    await page.locator("button:has-text('ACCEPT TOATE')").first().waitFor({ state: "visible", timeout: 5_000 });
+    if (paths) await appendLog(paths, "overlay dismiss: CMP cookie button appeared");
+  } catch {
+    // CMP may already be dismissed or not present on this page — continue with selector sweep.
+  }
   for (const sel of CASA_OVERLAY_DISMISS_SELECTORS) {
     try {
       const btn = page.locator(sel).first();
@@ -898,8 +910,74 @@ async function dismissCasaOverlays(page: Page, paths?: SessionPaths): Promise<vo
         // "JOACĂ ÎN CONTINUARE" triggers site-side re-auth — give it time
         if (sel.includes("JOACĂ")) await page.waitForTimeout(2_500);
         else await page.waitForTimeout(500);
+        // After accepting cookies the Usercentrics CMP aside persists and intercepts
+        // pointer events — remove it immediately so subsequent clicks land correctly.
+        if (sel.includes("ACCEPT") || sel.includes("Accept") || sel.includes("NECESARE")) {
+          await page.evaluate(() => {
+            document.getElementById("usercentrics-cmp-ui")?.remove();
+          }).catch(() => undefined);
+          if (paths) await appendLog(paths, "overlay dismiss: removed #usercentrics-cmp-ui after cookie accept");
+        }
       }
     } catch { /* overlay may not be present */ }
+  }
+  // Unconditionally remove Usercentrics CMP aside — it can persist across navigations
+  // and intercepts pointer events on login inputs even after cookie acceptance.
+  const ucmpRemoved = await page.evaluate(() => {
+    const el = document.getElementById("usercentrics-cmp-ui");
+    if (el) { el.remove(); return true; }
+    return false;
+  }).catch(() => false);
+  if (ucmpRemoved) {
+    logger.info("bba: dismissCasaOverlays removed lingering #usercentrics-cmp-ui");
+    if (paths) await appendLog(paths, "overlay dismiss: removed lingering #usercentrics-cmp-ui");
+  }
+  // Remove promotional/marketing popup overlays that obscure the page but are NOT login forms.
+  // Casa shows post-login promo popups (bonus offers) with CTA buttons but no close/X button.
+  const removedPromoOverlays = await page.evaluate(() => {
+    const popupCandidates = document.querySelectorAll(
+      "[role='dialog'], [class*='popup'], [class*='Popup'], [class*='modal'], [class*='Modal'], [class*='overlay-content'], [class*='promo'], [class*='Promo']"
+    );
+    let count = 0;
+    popupCandidates.forEach((el) => {
+      const e = el as HTMLElement;
+      if (e.querySelector("input[type='password']")) return;
+      if (e.querySelector("input[name='username']")) return;
+      if (e.querySelector(".user-box-form")) return;
+      const style = window.getComputedStyle(e);
+      const isOverlaying = style.position === "fixed" || style.position === "absolute" ||
+        (style.zIndex !== "" && style.zIndex !== "auto" && parseInt(style.zIndex, 10) > 100);
+      if (!isOverlaying) return;
+      const rect = e.getBoundingClientRect();
+      if (rect.width < 200 || rect.height < 150) return;
+      const text = e.innerText?.toLowerCase() ?? "";
+      const hasPromoContent = text.includes("bonus") || text.includes("ofert") ||
+        text.includes("gratis") || text.includes("free spin") || text.includes("cazino") || text.includes("casino") ||
+        (text.includes("inregistrare") && text.includes("conectare"));
+      if (hasPromoContent) {
+        const parent = e.parentElement;
+        if (parent) {
+          parent.querySelectorAll("[class*='backdrop'], [class*='Backdrop'], [class*='scrim'], [class*='overlay-bg']").forEach((bg) => bg.remove());
+        }
+        e.remove();
+        count++;
+      }
+    });
+    document.querySelectorAll("[class*='backdrop'], [class*='Backdrop'], [class*='overlay-mask'], [class*='modal-overlay']").forEach((el) => {
+      const bg = el as HTMLElement;
+      if (bg.querySelector("input[type='password']")) return;
+      const style = window.getComputedStyle(bg);
+      if (style.position === "fixed" && parseFloat(style.opacity) < 1) {
+        bg.remove();
+        count++;
+      }
+    });
+    return count;
+  }).catch(() => 0);
+  if (removedPromoOverlays > 0) {
+    const message = `bba: dismissCasaOverlays removed ${removedPromoOverlays} promotional overlay(s)`;
+    logger.info(message);
+    if (paths) await appendLog(paths, message);
   }
   // JS-based fallback: click any visible close/X button inside a modal/dialog/popup
   const jsClickedClose = await page.evaluate(() => {
@@ -907,7 +985,7 @@ async function dismissCasaOverlays(page: Page, paths?: SessionPaths): Promise<vo
       "[class*='popup'] button, [class*='modal'] button, [class*='Popup'] button, [class*='Modal'] button, [role='dialog'] button"
     )).filter((el) => {
       const e = el as HTMLElement;
-      const container = e.closest(".user-box-form, [role='dialog'], .modal, form");
+      const container = e.closest(".user-box-form, [role='dialog'], .modal, [class*='modal'], [class*='login'], form");
       if (container?.querySelector("input[type='password']")) return false;
       const r = e.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return false;
@@ -1301,6 +1379,9 @@ export async function waitForLoginOutcome(
     timeoutMs: number;
     sleep: (ms: number) => Promise<void>;
     pollIntervalMs?: number;
+    onPollTick?: () => Promise<void>;
+    onPollTickIntervalMs?: number;
+    skipFailureCheckMs?: number;
   },
 ) {
   const successSelectors = config.loginSuccess?.selectors ?? [];
@@ -1309,10 +1390,18 @@ export async function waitForLoginOutcome(
     return "unknown" as const;
   }
 
-  const deadline = Date.now() + Math.max(1, opts.timeoutMs);
+  const startedAt = Date.now();
+  const deadline = startedAt + Math.max(1, opts.timeoutMs);
   const pollIntervalMs = Math.max(10, opts.pollIntervalMs ?? 250);
+  const tickIntervalMs = opts.onPollTickIntervalMs ?? 3_000;
+  const skipFailureUntil = startedAt + Math.max(0, opts.skipFailureCheckMs ?? 0);
+  let lastTickAt = 0;
   while (Date.now() <= deadline) {
-    if (failureSelectors.length > 0) {
+    if (opts.onPollTick && Date.now() - lastTickAt >= tickIntervalMs) {
+      await opts.onPollTick().catch(() => {});
+      lastTickAt = Date.now();
+    }
+    if (failureSelectors.length > 0 && Date.now() >= skipFailureUntil) {
       const failureLocator = await locateVisibleOne(page, failureSelectors, bet);
       if (failureLocator) return "failure" as const;
     }
@@ -1651,18 +1740,42 @@ async function performLogin(
   await usernameLocator.fill(username);
   await sleepFor(deps.sleep, runtime, deps.random);
   await passwordLocator.fill(password);
+
+  // Press Enter on the password field first — many login forms submit on Enter even
+  // when the button click doesn't trigger the form submission (JS intercept, wrong button).
+  await passwordLocator.press("Enter").catch(() => undefined);
+  await deps.sleep(500);
+
   await clickHuman(page, loginLocator, cursorPos, {
     sleep: deps.sleep,
     random: deps.random,
     minClickIntervalMs: runtime.minClickIntervalMs,
     lastClickAt: deps.lastClickAt,
   });
+
+  // JS form.submit() fallback: if the button click didn't trigger navigation,
+  // force-submit the form containing the password field.
+  if (isCasaLogin) {
+    await passwordLocator.evaluate((el) => {
+      const form = (el as HTMLElement).closest("form");
+      if (form) form.submit();
+    }).catch(() => undefined);
+    await appendLog(paths, "login: JS form.submit() fallback fired");
+  }
+
   screenshots.push(await screenshot(page, paths, "after-login-submit"));
   await appendLog(paths, "login submitted");
+
+  if (isCasaLogin) {
+    await deps.sleep(2_000);
+    await dismissCasaOverlays(page, paths);
+  }
 
   const loginOutcome = await waitForLoginOutcome(page, request.bookmakerConfig, request.bet, {
     timeoutMs: runtime.pageTimeoutMs,
     sleep: deps.sleep,
+    onPollTick: isCasaLogin ? () => dismissCasaOverlays(page, paths) : undefined,
+    skipFailureCheckMs: isCasaLogin ? 5_000 : 0,
   });
   if (loginOutcome === "failure") {
     throw new Error("Login failure indicator appeared after submit.");
